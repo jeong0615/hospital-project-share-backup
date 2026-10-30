@@ -781,6 +781,3 @@ app.use((req, res) => res.status(404).render('pages/not-found'));
 app.listen(PORT, 'IP_REDACTED', () => {
   console.log(`Hospital web server listening on port ${PORT}`);
 });
-
-
-

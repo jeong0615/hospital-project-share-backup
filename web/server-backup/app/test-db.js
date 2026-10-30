@@ -16,7 +16,7 @@ const mysql = require('mysql2/promise');
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    connectTimeout: 30000    
+    connectTimeout: 30000
   });
 
   const [rows] = await conn.query('SELECT 1 AS ok');
