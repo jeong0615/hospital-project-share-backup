@@ -1,0 +1,15 @@
+[Unit]
+Description=Hospital Web App
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/vboxuser/hospital-web
+EnvironmentFile=/home/vboxuser/hospital-web/.env
+ExecStart=/usr/bin/node /home/vboxuser/hospital-web/app.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

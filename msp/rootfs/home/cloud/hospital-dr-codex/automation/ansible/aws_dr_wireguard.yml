@@ -1,0 +1,21 @@
+---
+# Explicit, opt-in playbook for the dedicated AWS DR WireGuard path.
+# It is intentionally separate from site.yml so ordinary DR provisioning does
+# not install or restart WireGuard. Set AWS_DR_WG_ENABLED=true only during a
+# reviewed live-enablement window, with key files supplied outside Git.
+
+- name: Configure the AWS Web WireGuard gateway
+  hosts: aws_dr_wg_gateway
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  roles:
+    - aws_dr_wireguard_gateway
+
+- name: Configure the On-Prem DB WireGuard client
+  hosts: onprem_db_wg
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  roles:
+    - aws_dr_wireguard_client

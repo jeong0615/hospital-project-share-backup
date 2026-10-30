@@ -1,0 +1,17 @@
+# Copy only after an operator has selected a clean synthetic AMI and reserved a
+# non-overlapping CIDR. This example is intentionally not executable as-is.
+expected_account_id     = "AWS_ACCOUNT_ID_REDACTED"
+region                  = "ap-northeast-2"
+enable_canary           = false
+confirmation            = ""
+run_id                  = ""
+availability_zone       = ""
+vpc_cidr                = ""
+public_subnet_cidr      = ""
+private_subnet_cidr     = ""
+web_private_ip          = ""
+emr_private_ip          = ""
+synthetic_ami_id        = "AWS_RESOURCE_ID_REDACTED" # AWS-owned AL2023 candidate verified 2026-10-17; re-query before approval.
+probe_ipv4              = ""
+probe_domain            = "nat-probe.hospital-web.pp.ua"
+enable_ec2messages_endpoint = false

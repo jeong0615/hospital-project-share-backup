@@ -1,0 +1,25 @@
+[Unit]
+Description=Hospital DR ChatOps ngrok tunnel
+Requires=hospital-dr-chatops.service
+After=hospital-dr-chatops.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloud
+WorkingDirectory=/home/cloud
+Environment=HOME=/home/cloud
+Environment=NGROK_URL_STATE_FILE=/var/lib/hospital-dr/ngrok_public_url
+StateDirectory=hospital-dr
+StateDirectoryMode=0750
+ExecStart=/snap/bin/ngrok --config=/home/cloud/snap/ngrok/current/.config/ngrok/ngrok.yml http 5000 --log=stdout --log-level=info
+ExecStartPost=/usr/bin/python3 /home/cloud/dr_project/ngrok_url_check.py --record --wait-seconds 30
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGINT
+UMask=0077
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

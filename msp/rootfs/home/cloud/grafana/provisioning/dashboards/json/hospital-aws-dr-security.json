@@ -1,0 +1,85 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "AWS CloudTrail Events",
+      "description": "Real CloudTrail Event History documents normalized by the existing MSP collector.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALAWSCLOUD"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "AWS High-risk Events",
+      "description": "High-risk IAM, EC2, security-group, and authentication events; zero is a real result.",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALAWSCLOUD"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "severity:HIGH", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "AWS Events by Category",
+      "description": "CloudTrail events grouped by normalized security category.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALAWSCLOUD"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "alias": "aws_api", "query": "category:aws_api", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "B", "alias": "ec2", "query": "category:ec2", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Latest AWS Security Events",
+      "description": "Normalized CloudTrail metadata; raw session material is intentionally not indexed.",
+      "gridPos": {"h": 10, "w": 14, "x": 0, "y": 8},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALAWSCLOUD"},
+      "fieldConfig": {"defaults": {"noValue": "NO SECURITY-RELEVANT CLOUDTRAIL EVENTS IN RANGE"}, "overrides": []},
+      "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
+      "targets": [{"refId": "A", "query": "security_relevant:true", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "AWS XDR Incidents",
+      "description": "Deterministic incidents from the existing Wazuh correlation index.",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 8},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALSECURITYINCIDENTS"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "environment:aws OR source:aws-cloudtrail", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 7,
+      "type": "text",
+      "title": "AWS DR Cost / Scope",
+      "description": "Scope guard for this extension.",
+      "gridPos": {"h": 5, "w": 16, "x": 8, "y": 8},
+      "options": {"mode": "markdown", "content": "## Scope guard\n\nNo EKS, Kubernetes, AWS VPN, AWS↔MSP WireGuard, GuardDuty, Security Hub, Detective, managed OpenSearch, load balancer, or new paid security service is part of this dashboard. The optional dedicated AWS DR DB WireGuard path is separate, disabled by default, and is not an AWS cloud-security ingestion path. CloudTrail Event History is read through the existing AWS API and normalized into the existing MSP Wazuh Indexer."}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["MSP", "DR", "AWS", "Security", "Wazuh"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timezone": "browser",
+  "title": "Hospital AWS Cloud Security",
+  "uid": "hospital-aws-dr-security",
+  "version": 1
+}

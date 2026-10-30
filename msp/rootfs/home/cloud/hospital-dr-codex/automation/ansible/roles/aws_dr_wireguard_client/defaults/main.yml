@@ -1,0 +1,11 @@
+---
+aws_dr_wg_enabled: "{{ lookup('env', 'AWS_DR_WG_ENABLED') | default('false', true) | bool }}"
+aws_dr_wg_prepare_only: false
+aws_dr_wg_interface: wg-aws-dr
+aws_dr_wg_cidr: AWS_PUBLIC_IP_REDACTED/24
+aws_dr_wg_client_address: AWS_PUBLIC_IP_REDACTED/32
+aws_dr_wg_aws_db_ip: AWS_PUBLIC_IP_REDACTED/32
+aws_dr_wg_endpoint: AWS_PUBLIC_IP_REDACTED:51821
+aws_dr_wg_listen_port: 51821
+aws_dr_wg_web_public_key_file: /etc/hospital-dr/wireguard/aws-dr-web.pub
+aws_dr_wg_onprem_private_key_file: /etc/hospital-dr/wireguard/aws-dr-onprem.key

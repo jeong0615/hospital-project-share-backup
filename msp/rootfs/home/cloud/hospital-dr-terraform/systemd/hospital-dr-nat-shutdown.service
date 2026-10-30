@@ -1,0 +1,15 @@
+[Unit]
+Description=Delete Hospital DR NAT Gateway before controller shutdown
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=cloud
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/home/cloud/hospital-dr-terraform/nat_gateway_control.sh disable
+TimeoutStopSec=10min
+
+[Install]
+WantedBy=multi-user.target

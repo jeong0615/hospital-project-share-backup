@@ -1,0 +1,280 @@
+---
+- name: "Initialize DR web deployment variables / DR Web 배포 변수 초기화"
+  set_fact:
+    web_app_dir: "/home/ubuntu/hospital-web"
+    web_db_host: "{{ hostvars[groups['db_servers'][0]].ansible_host | default(groups['db_servers'][0]) }}"
+
+- name: "Validate DR web secrets / DR Web secret 검증"
+  assert:
+    that:
+      - lookup('env', 'WEB_DB_PASSWORD') | length > 0
+      - lookup('env', 'SESSION_SECRET') | length > 0
+    fail_msg: "Missing required secrets: WEB_DB_PASSWORD and SESSION_SECRET. Set them in /home/cloud/hospital-dr-secrets/dr.env."
+
+- name: "Install required system packages / 필수 시스템 패키지 설치"
+  apt:
+    name: ['curl', 'rsync', 'nginx', 'openssl']
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: "Configure Node.js package repository / Node.js 패키지 저장소 구성"
+  shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  become: yes
+
+- name: "Install Node.js runtime / Node.js 런타임 설치"
+  apt:
+    name: ['nodejs']
+    state: present
+  become: yes
+
+- name: "Install PM2 process manager globally / PM2 프로세스 매니저 전역 설치"
+  npm:
+    name: pm2
+    global: yes
+  become: yes
+
+- name: "Create DR web application directory / DR Web 애플리케이션 디렉토리 생성"
+  file:
+    path: "{{ web_app_dir }}"
+    state: directory
+    owner: "ubuntu"
+    group: "ubuntu"
+    mode: '0755'
+  become: yes
+
+- name: "Synchronize Node.js application source / Node.js 애플리케이션 소스 동기화"
+  synchronize:
+    src: "{{ role_path }}/files/"
+    dest: "{{ web_app_dir }}/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=node_modules"
+      - "--exclude=.env"
+
+- name: "Normalize application file ownership and permissions / 애플리케이션 파일 소유권 및 권한 정리"
+  file:
+    path: "{{ web_app_dir }}"
+    owner: "ubuntu"
+    group: "ubuntu"
+    mode: "u=rwX,g=rX,o=rX"
+    recurse: yes
+  become: yes
+
+- name: "Render application environment file for the DR database endpoint / DR 데이터베이스 엔드포인트용 환경 파일 생성"
+  copy:
+    dest: "{{ web_app_dir }}/.env"
+    content: |
+      PORT=3000
+      SERVER_ROLE=dr-web
+      DB_HOST={{ web_db_host }}
+      DB_PORT=3306
+      DB_USER=root
+      DB_PASSWORD={{ lookup('env', 'WEB_DB_PASSWORD') }}
+      DB_NAME=hospital_db
+      SESSION_SECRET={{ lookup('env', 'SESSION_SECRET') }}
+      COOKIE_SECURE=false
+    owner: "ubuntu"
+    group: "ubuntu"
+    mode: '0600'
+  become: yes
+
+- name: "Install production Node.js dependencies / 운영용 Node.js 의존성 설치"
+  npm:
+    path: "{{ web_app_dir }}"
+    production: yes
+    state: present
+  become: yes
+  become_user: "ubuntu"
+
+- name: "Start DR web application under PM2 supervision / PM2로 DR Web 애플리케이션 시작"
+  shell: |
+    pm2 delete hospital-web || true
+    pm2 start app.js --name "hospital-web" --update-env
+    pm2 save
+  args:
+    chdir: "{{ web_app_dir }}"
+  become: yes
+  become_user: "ubuntu"
+
+- name: "Register PM2 as a system startup service / PM2 시스템 부팅 서비스 등록"
+  command: pm2 startup systemd -u ubuntu --hp /home/ubuntu
+  become: yes
+  changed_when: false
+
+- name: "Hand PM2 daemon ownership to systemd / PM2 daemon 관리 권한을 systemd로 전환"
+  command: pm2 kill
+  become: yes
+  become_user: "ubuntu"
+  changed_when: true
+
+- name: "Enable PM2 application restoration after reboot / 재부팅 후 PM2 애플리케이션 자동 복구 활성화"
+  systemd:
+    name: pm2-ubuntu
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  become: yes
+
+- name: "Create local TLS directory for DR origin certificate / DR 원본 서버 TLS 디렉토리 생성"
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  become: yes
+
+- name: "Generate self-signed TLS certificate for DR origin / DR 원본 서버 자체 서명 TLS 인증서 생성"
+  shell: |
+    if [ ! -f /etc/nginx/ssl/hospital-web.crt ] || [ ! -f /etc/nginx/ssl/hospital-web.key ]; then
+      openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/hospital-web.key \
+        -out /etc/nginx/ssl/hospital-web.crt \
+        -subj "/CN=hospital-web.pp.ua"
+      chmod 600 /etc/nginx/ssl/hospital-web.key
+      chmod 644 /etc/nginx/ssl/hospital-web.crt
+    fi
+  become: yes
+
+- name: "Configure EMR access restriction variables / EMR 접근 제한 변수 구성"
+  copy:
+    dest: /etc/nginx/conf.d/hospital-emr-access.conf
+    content: |
+      map $http_cf_connecting_ip $hospital_emr_cf_allowed {
+          default 0;
+          IP_REDACTED 1;
+      }
+
+      map $http_x_hospital_dr_check $hospital_emr_probe_allowed {
+          default 0;
+          "dr-emr-check-2026" 1;
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: "Configure Nginx HTTPS reverse proxy for standard service URL / 표준 서비스 URL용 Nginx HTTPS reverse proxy 구성"
+  copy:
+    dest: /etc/nginx/sites-available/hospital-web
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name hospital-web.pp.ua _;
+
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl default_server;
+          listen [::]:443 ssl default_server;
+          server_name hospital-web.pp.ua;
+
+          ssl_certificate /etc/nginx/ssl/hospital-web.crt;
+          ssl_certificate_key /etc/nginx/ssl/hospital-web.key;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_prefer_server_ciphers off;
+
+          set $hospital_emr_access_allowed 0;
+          if ($hospital_emr_cf_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+          if ($hospital_emr_probe_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+
+          location / {
+              proxy_pass http://IP_REDACTED:3000;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+          }
+
+          location = /emr {
+              return 301 /emr/;
+          }
+
+          location /emr/ {
+              if ($hospital_emr_access_allowed = 0) {
+                  return 403;
+              }
+              rewrite ^/emr/(.*)$ /$1 break;
+              proxy_pass http://IP_REDACTED;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Prefix /emr;
+          }
+      }
+
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name emr.hospital-web.pp.ua;
+
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          server_name emr.hospital-web.pp.ua;
+
+          ssl_certificate /etc/nginx/ssl/hospital-web.crt;
+          ssl_certificate_key /etc/nginx/ssl/hospital-web.key;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_prefer_server_ciphers off;
+
+          set $hospital_emr_access_allowed 0;
+          if ($hospital_emr_cf_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+          if ($hospital_emr_probe_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+
+          location / {
+              if ($hospital_emr_access_allowed = 0) {
+                  return 403;
+              }
+              proxy_pass http://IP_REDACTED;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: "Enable Nginx reverse proxy site / Nginx reverse proxy 사이트 활성화"
+  file:
+    src: /etc/nginx/sites-available/hospital-web
+    dest: /etc/nginx/sites-enabled/hospital-web
+    state: link
+    force: yes
+  become: yes
+
+- name: "Disable default Nginx site / 기본 Nginx 사이트 비활성화"
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  become: yes
+
+- name: "Validate and reload Nginx reverse proxy / Nginx reverse proxy 설정 검증 및 재시작"
+  shell: |
+    nginx -t
+    systemctl enable nginx
+    systemctl reload nginx || systemctl restart nginx
+  become: yes

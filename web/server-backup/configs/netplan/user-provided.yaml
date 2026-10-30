@@ -1,0 +1,14 @@
+network:
+  version: 2
+  ethernets:
+    enp0s3:
+      dhcp4: no
+      addresses:
+        - IP_REDACTED/24
+      nameservers:
+        addresses:
+          - IP_REDACTED
+          - IP_REDACTED
+      routes:
+        - to: default
+          via: IP_REDACTED

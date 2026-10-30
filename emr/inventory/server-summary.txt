@@ -1,0 +1,14 @@
+Collection date: 2026-10-29
+Host: hoseo-VirtualBox
+OS: Ubuntu 22.04.5 LTS
+Kernel: 6.8.0-124-generic
+SSH account: hoseo
+Primary application source: /home/hoseo/hospital_emr
+Secondary project source: /home/hoseo/doctor_web
+Nginx document root: /var/www/html
+Nginx HTTP listener: IP_REDACTED:80 and [::]:80
+Node shell version: v12.22.9; running EMR process executable: /home/hoseo/.nvm/versions/node/v24.15.0/bin/node
+Node package manager shell version: npm 8.5.1
+System Python: 3.10.12
+Docker/PM2: not installed or not available in PATH during inspection
+Node EMR process: running from /home/hoseo/hospital_emr, listening on IP_REDACTED:5000

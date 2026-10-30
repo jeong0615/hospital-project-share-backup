@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# This controller owns only the two named chains below. It never flushes the
+# global filter/nat tables and never edits Docker or WireGuard chains.
+IPTABLES_BIN="${IPTABLES_BIN:-/usr/sbin/iptables}"
+UPLINK="{{ aws_web_nat_instance_uplink_interface }}"
+FORWARD_CHAIN="{{ aws_web_nat_instance_forward_chain }}"
+POSTROUTING_CHAIN="{{ aws_web_nat_instance_postrouting_chain }}"
+WG_INTERFACE="{{ aws_web_nat_instance_interface }}"
+SYSCTL_FILE="{{ aws_web_nat_instance_sysctl_file }}"
+SERVICE_NAME="{{ aws_web_nat_instance_service }}"
+STATE_DIR="${HOSPITAL_DR_NAT_STATE_DIR:-{{ aws_web_nat_instance_state_dir }}}"
+BASELINE_FILE="${HOSPITAL_DR_NAT_FIREWALL_BASELINE:-$STATE_DIR/firewall-baseline}"
+OWNED_MARKER="$STATE_DIR/firewall-owned"
+
+private_cidrs=(
+{% for cidr in aws_web_nat_instance_private_cidrs %}
+  "{{ cidr }}"
+{% endfor %}
+)
+excluded_destinations=(
+{% for cidr in aws_web_nat_instance_excluded_destinations %}
+  "{{ cidr }}"
+{% endfor %}
+)
+
+iptables_cmd() {
+  "$IPTABLES_BIN" -w "$@"
+}
+
+iptables_nat_cmd() {
+  "$IPTABLES_BIN" -w -t nat "$@"
+}
+
+chain_exists() {
+  iptables_cmd -S "$1" >/dev/null 2>&1
+}
+
+nat_chain_exists() {
+  iptables_nat_cmd -S "$1" >/dev/null 2>&1
+}
+
+FILTER_CREATED=0
+NAT_CREATED=0
+FILTER_HOOK_ADDED=0
+NAT_HOOK_ADDED=0
+
+remove_jump() {
+  local table="$1"
+  local chain="$2"
+  while true; do
+    if [ "$table" = nat ]; then
+      iptables_nat_cmd -C POSTROUTING -j "$chain" >/dev/null 2>&1 || break
+      iptables_nat_cmd -D POSTROUTING -j "$chain"
+    else
+      iptables_cmd -C FORWARD -j "$chain" >/dev/null 2>&1 || break
+      iptables_cmd -D FORWARD -j "$chain"
+    fi
+  done
+}
+
+remove_owned_chains() {
+  local baseline
+  baseline="$(read_firewall_baseline)"
+  case "$baseline" in
+    exact)
+      if firewall_absent; then
+        apply_owned_chains
+        echo "NAT_FIREWALL_BASELINE=RESTORED_EXACT"
+      elif firewall_rules_exact; then
+        echo "NAT_FIREWALL_BASELINE=PRESERVED_EXACT"
+      else
+        echo "NAT_FIREWALL_REMOVE=BLOCKED_DRIFT" >&2
+        return 1
+      fi
+      ;;
+    absent)
+      if firewall_absent; then
+        rm -f -- "$OWNED_MARKER"
+        echo "NAT_FIREWALL_BASELINE=RESTORED_ABSENT"
+        return 0
+      fi
+      [ -f "$OWNED_MARKER" ] || { echo "NAT_FIREWALL_REMOVE=BLOCKED_UNOWNED_RULES" >&2; return 1; }
+      firewall_rules_exact || { echo "NAT_FIREWALL_REMOVE=BLOCKED_DRIFT" >&2; return 1; }
+      remove_jump filter "$FORWARD_CHAIN"
+      remove_jump nat "$POSTROUTING_CHAIN"
+      iptables_cmd -F "$FORWARD_CHAIN"
+      iptables_cmd -X "$FORWARD_CHAIN"
+      iptables_nat_cmd -F "$POSTROUTING_CHAIN"
+      iptables_nat_cmd -X "$POSTROUTING_CHAIN"
+      rm -f -- "$OWNED_MARKER"
+      echo "NAT_FIREWALL_BASELINE=RESTORED_ABSENT"
+      ;;
+    *)
+      echo "NAT_FIREWALL_BASELINE=UNVERIFIED" >&2
+      return 1
+      ;;
+  esac
+}
+
+firewall_absent() {
+  ! chain_exists "$FORWARD_CHAIN" \
+    && ! nat_chain_exists "$POSTROUTING_CHAIN" \
+    && [ "$(filter_jump_count)" -eq 0 ] \
+    && [ "$(nat_jump_count)" -eq 0 ]
+}
+
+filter_jump_count() {
+  iptables_cmd -S FORWARD 2>/dev/null | awk -v chain="$FORWARD_CHAIN" '$1 == "-A" && $2 == "FORWARD" && $0 ~ "-j " chain "$" { n++ } END { print n+0 }'
+}
+
+nat_jump_count() {
+  iptables_nat_cmd -S POSTROUTING 2>/dev/null | awk -v chain="$POSTROUTING_CHAIN" '$1 == "-A" && $2 == "POSTROUTING" && $0 ~ "-j " chain "$" { n++ } END { print n+0 }'
+}
+
+expected_filter_count() {
+  local count=1 _value
+  for _value in "${excluded_destinations[@]}" "${private_cidrs[@]}"; do count=$((count + 1)); done
+  echo "$count"
+}
+
+expected_nat_count() {
+  local count=0 _value
+  for _value in "${excluded_destinations[@]}" "${private_cidrs[@]}"; do count=$((count + 1)); done
+  echo "$count"
+}
+
+firewall_rules_exact() {
+  local excluded cidr filter_count nat_count
+  chain_exists "$FORWARD_CHAIN" && nat_chain_exists "$POSTROUTING_CHAIN" || return 1
+  [ "$(filter_jump_count)" -eq 1 ] && [ "$(nat_jump_count)" -eq 1 ] || return 1
+  iptables_cmd -C "$FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || return 1
+  for excluded in "${excluded_destinations[@]}"; do
+    iptables_cmd -C "$FORWARD_CHAIN" -d "$excluded" -j RETURN >/dev/null 2>&1 || return 1
+    iptables_nat_cmd -C "$POSTROUTING_CHAIN" -d "$excluded" -j RETURN >/dev/null 2>&1 || return 1
+  done
+  for cidr in "${private_cidrs[@]}"; do
+    iptables_cmd -C "$FORWARD_CHAIN" -s "$cidr" -o "$UPLINK" -j ACCEPT >/dev/null 2>&1 || return 1
+    iptables_nat_cmd -C "$POSTROUTING_CHAIN" -s "$cidr" -o "$UPLINK" -j MASQUERADE >/dev/null 2>&1 || return 1
+  done
+  filter_count="$(iptables_cmd -S "$FORWARD_CHAIN" 2>/dev/null | awk '$1 == "-A" { n++ } END { print n+0 }')"
+  nat_count="$(iptables_nat_cmd -S "$POSTROUTING_CHAIN" 2>/dev/null | awk '$1 == "-A" { n++ } END { print n+0 }')"
+  [ "$filter_count" -eq "$(expected_filter_count)" ] && [ "$nat_count" -eq "$(expected_nat_count)" ]
+}
+
+read_firewall_baseline() {
+  [ -f "$BASELINE_FILE" ] && [ ! -L "$BASELINE_FILE" ] || return 1
+  [ "$(stat -c '%a:%u:%g' "$BASELINE_FILE" 2>/dev/null)" = "600:$(id -u):$(id -g)" ] || return 1
+  tr -d '\r\n' < "$BASELINE_FILE"
+}
+
+create_expected_chains() {
+  local excluded cidr
+  iptables_cmd -N "$FORWARD_CHAIN"
+  FILTER_CREATED=1
+  iptables_nat_cmd -N "$POSTROUTING_CHAIN"
+  NAT_CREATED=1
+
+  iptables_cmd -A "$FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  for excluded in "${excluded_destinations[@]}"; do
+    iptables_cmd -A "$FORWARD_CHAIN" -d "$excluded" -j RETURN
+  done
+  for cidr in "${private_cidrs[@]}"; do
+    iptables_cmd -A "$FORWARD_CHAIN" -s "$cidr" -o "$UPLINK" -j ACCEPT
+  done
+
+  for excluded in "${excluded_destinations[@]}"; do
+    iptables_nat_cmd -A "$POSTROUTING_CHAIN" -d "$excluded" -j RETURN
+  done
+  for cidr in "${private_cidrs[@]}"; do
+    iptables_nat_cmd -A "$POSTROUTING_CHAIN" -s "$cidr" -o "$UPLINK" -j MASQUERADE
+  done
+
+  iptables_cmd -I FORWARD 1 -j "$FORWARD_CHAIN"
+  FILTER_HOOK_ADDED=1
+  iptables_nat_cmd -I POSTROUTING 1 -j "$POSTROUTING_CHAIN"
+  NAT_HOOK_ADDED=1
+}
+
+snapshot_firewall() {
+  local existing
+  if [ -f "$BASELINE_FILE" ]; then
+    existing="$(read_firewall_baseline)" || { echo "NAT_FIREWALL_BASELINE=INVALID" >&2; return 1; }
+    case "$existing" in
+      exact) firewall_rules_exact || firewall_absent || { echo "NAT_FIREWALL_BASELINE=BLOCKED_DRIFT" >&2; return 1; } ;;
+      absent) firewall_absent || { [ -f "$OWNED_MARKER" ] && firewall_rules_exact; } || { echo "NAT_FIREWALL_BASELINE=BLOCKED_DRIFT" >&2; return 1; } ;;
+      *) echo "NAT_FIREWALL_BASELINE=INVALID" >&2; return 1 ;;
+    esac
+    echo "NAT_FIREWALL_BASELINE=$existing"
+    return 0
+  fi
+  if firewall_absent; then
+    existing=absent
+  elif firewall_rules_exact; then
+    existing=exact
+  else
+    echo "NAT_FIREWALL_SNAPSHOT=BLOCKED_EXISTING_RULE_DRIFT" >&2
+    return 1
+  fi
+  mkdir -p -- "$STATE_DIR"
+  chmod 0700 "$STATE_DIR"
+  temporary="$BASELINE_FILE.tmp.$$"
+  (umask 077; printf '%s\n' "$existing" > "$temporary")
+  chown "$(id -u):$(id -g)" "$temporary"
+  chmod 0600 "$temporary"
+  mv -f -- "$temporary" "$BASELINE_FILE"
+  echo "NAT_FIREWALL_BASELINE=$existing"
+}
+
+apply_owned_chains() {
+  local baseline
+  baseline="$(read_firewall_baseline)" || { echo "NAT_FIREWALL_BASELINE=UNVERIFIED" >&2; return 1; }
+  if firewall_rules_exact; then
+    if [ "$baseline" = absent ] && [ ! -f "$OWNED_MARKER" ]; then
+      echo "NAT_FIREWALL_APPLY=BLOCKED_UNOWNED_RULES" >&2
+      return 1
+    fi
+    echo "NAT_FIREWALL_APPLY=ALREADY_EXACT"
+    return 0
+  fi
+  firewall_absent || { echo "NAT_FIREWALL_APPLY=BLOCKED_DRIFT" >&2; return 1; }
+  [ "$baseline" = exact ] || [ "$baseline" = absent ] || return 1
+  FILTER_CREATED=0
+  NAT_CREATED=0
+  FILTER_HOOK_ADDED=0
+  NAT_HOOK_ADDED=0
+  apply_in_progress=1
+  trap 'if [ "${apply_in_progress:-0}" -eq 1 ]; then remove_partial_rules; fi' ERR
+  create_expected_chains
+  if [ "$baseline" = absent ]; then
+    (umask 077; printf 'owned\n' > "$OWNED_MARKER.tmp.$$" )
+    chown "$(id -u):$(id -g)" "$OWNED_MARKER.tmp.$$"
+    chmod 0600 "$OWNED_MARKER.tmp.$$"
+    mv -f -- "$OWNED_MARKER.tmp.$$" "$OWNED_MARKER"
+  fi
+  apply_in_progress=0
+  trap - ERR
+  firewall_rules_exact || { echo "NAT_FIREWALL_APPLY=VERIFY_FAILED" >&2; return 1; }
+  echo "NAT_FIREWALL_APPLY=PASS"
+}
+
+remove_partial_rules() {
+  if [ "$FILTER_HOOK_ADDED" -eq 1 ]; then remove_jump filter "$FORWARD_CHAIN" || true; fi
+  if [ "$NAT_HOOK_ADDED" -eq 1 ]; then remove_jump nat "$POSTROUTING_CHAIN" || true; fi
+  if [ "$FILTER_CREATED" -eq 1 ] && chain_exists "$FORWARD_CHAIN"; then
+    iptables_cmd -F "$FORWARD_CHAIN" || true
+    iptables_cmd -X "$FORWARD_CHAIN" || true
+  fi
+  if [ "$NAT_CREATED" -eq 1 ] && nat_chain_exists "$POSTROUTING_CHAIN"; then
+    iptables_nat_cmd -F "$POSTROUTING_CHAIN" || true
+    iptables_nat_cmd -X "$POSTROUTING_CHAIN" || true
+  fi
+  rm -f -- "$OWNED_MARKER" "$OWNED_MARKER.tmp.$$"
+}
+
+verify_baseline() {
+  local baseline
+  baseline="$(read_firewall_baseline)" || return 1
+  case "$baseline" in
+    exact) firewall_rules_exact ;;
+    absent) firewall_absent ;;
+    *) return 1 ;;
+  esac
+}
+
+verify_owned_chains() {
+  local failed=0 ip_forward service_active service_enabled uplink_route
+  local forward_rules nat_rules expected_forward_rules expected_nat_rules excluded cidr
+
+  ip_forward="$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)"
+  systemctl is-active --quiet "$SERVICE_NAME" >/dev/null 2>&1 && service_active=active || service_active=inactive
+  systemctl is-enabled --quiet "$SERVICE_NAME" >/dev/null 2>&1 && service_enabled=enabled || service_enabled=disabled
+  uplink_route="$(ip -4 route show default dev "$UPLINK" 2>/dev/null || true)"
+
+  [ "$ip_forward" = "1" ] || failed=1
+  [ "$service_active" = "active" ] || failed=1
+  [ "$service_enabled" = "enabled" ] || failed=1
+  [ -r "$SYSCTL_FILE" ] && grep -Eq '^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$' "$SYSCTL_FILE" || failed=1
+  [ -n "$uplink_route" ] || failed=1
+  ip link show "$UPLINK" >/dev/null 2>&1 || failed=1
+
+  firewall_rules_exact || failed=1
+  forward_rules="$(iptables_cmd -S "$FORWARD_CHAIN" 2>/dev/null | awk '$1 == "-A" { count++ } END { print count+0 }')"
+  nat_rules="$(iptables_nat_cmd -S "$POSTROUTING_CHAIN" 2>/dev/null | awk '$1 == "-A" { count++ } END { print count+0 }')"
+  expected_forward_rules="$(expected_filter_count)"
+  expected_nat_rules="$(expected_nat_count)"
+
+  echo "NAT_GUEST_SERVICE_ACTIVE=$service_active"
+  echo "NAT_GUEST_SERVICE_ENABLED=$service_enabled"
+  echo "NAT_GUEST_IP_FORWARD=$ip_forward"
+  echo "NAT_GUEST_SYSCTL_CONFIG=$([ -r "$SYSCTL_FILE" ] && echo present || echo missing)"
+  echo "NAT_GUEST_UPLINK=$UPLINK"
+  echo "NAT_GUEST_UPLINK_DEFAULT_ROUTE=$([ -n "$uplink_route" ] && echo present || echo missing)"
+  echo "NAT_GUEST_FORWARD_RULES=$forward_rules/$expected_forward_rules"
+  echo "NAT_GUEST_POSTROUTING_RULES=$nat_rules/$expected_nat_rules"
+  if [ "$failed" -eq 0 ]; then
+    echo "NAT_GUEST_STATUS=READY"
+    return 0
+  fi
+  echo "NAT_GUEST_STATUS=BLOCKED"
+  return 1
+}
+
+case "${1:-status}" in
+  apply)
+    apply_owned_chains
+    ;;
+  remove)
+    remove_owned_chains
+    ;;
+  snapshot-firewall)
+    snapshot_firewall
+    ;;
+  verify-baseline)
+    verify_baseline && echo "NAT_FIREWALL_BASELINE_VERIFY=PASS" || { echo "NAT_FIREWALL_BASELINE_VERIFY=BLOCKED"; exit 1; }
+    ;;
+  status)
+    chain_exists "$FORWARD_CHAIN" && echo "FORWARD_CHAIN=present" || echo "FORWARD_CHAIN=absent"
+    nat_chain_exists "$POSTROUTING_CHAIN" && echo "POSTROUTING_CHAIN=present" || echo "POSTROUTING_CHAIN=absent"
+    echo "UPLINK=$UPLINK"
+    echo "WG_INTERFACE=$WG_INTERFACE"
+    ;;
+  verify)
+    verify_owned_chains
+    ;;
+  *)
+    echo "Usage: $0 {apply|remove|snapshot-firewall|verify-baseline|status|verify}" >&2
+    exit 2
+    ;;
+esac

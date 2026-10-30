@@ -1,0 +1,9 @@
+TCP IP_REDACTED:22 and [::]:22       SSH
+TCP IP_REDACTED:80 and [::]:80       Nginx
+TCP IP_REDACTED:5000                 hospital_emr Node/Express process
+TCP *:21                          vsftpd
+TCP IP_REDACTED:10050 and [::]:10050 Zabbix agent
+TCP IP_REDACTED:631 and [::1]:631  local printing service
+UDP IP_REDACTED:53                 systemd-resolved
+
+The application source was not listening on a Node port during inspection.

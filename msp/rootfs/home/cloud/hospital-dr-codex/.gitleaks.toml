@@ -1,0 +1,10 @@
+title = "Hospital DR repository secret scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic values used by unit tests only; real secrets are never allowlisted."
+regexes = [
+  '''(?i)^(?:runtime-token|runtime-api-password|runtime-indexer-password|api-password|indexer-password|fake-zone|not-used-by-test|failover-signing-secret|failback-signing-secret|test-signing-secret|compat-pass)$''',
+]

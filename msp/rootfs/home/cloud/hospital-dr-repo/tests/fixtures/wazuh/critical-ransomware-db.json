@@ -1,0 +1,16 @@
+{
+  "id": "wazuh-event-critical-db-1",
+  "timestamp": "2026-09-05T09:02:00.000+0900",
+  "rule": {
+    "id": "100901",
+    "level": 14,
+    "description": "Ransomware-like file encryption detected on DB server",
+    "groups": ["ransomware", "syscheck"],
+    "mitre": [{"id": "T1486", "name": "Data Encrypted for Impact"}]
+  },
+  "agent": {"id": "003", "name": "DB_Server", "ip": "IP_REDACTED"},
+  "decoder": {"name": "syscheck"},
+  "data": {"srcip": "IP_REDACTED", "dstip": "IP_REDACTED"},
+  "location": "/var/ossec/logs/alerts/alerts.json",
+  "full_log": "internal-detail-should-not-be-forwarded"
+}

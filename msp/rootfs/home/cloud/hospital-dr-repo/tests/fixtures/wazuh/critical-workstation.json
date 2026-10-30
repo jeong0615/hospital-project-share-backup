@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-09-05T09:03:00.000+0900",
+  "rule": {
+    "id": "100902",
+    "level": 14,
+    "description": "Critical policy event on a workstation",
+    "groups": ["policy"]
+  },
+  "agent": {"id": "004", "name": "Office_Workstation", "ip": "IP_REDACTED"},
+  "decoder": {"name": "audit"},
+  "full_log": "critical event without service impact"
+}

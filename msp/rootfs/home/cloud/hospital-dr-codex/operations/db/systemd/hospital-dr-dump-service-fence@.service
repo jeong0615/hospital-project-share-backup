@@ -1,0 +1,14 @@
+[Unit]
+Description=Hospital DR Dump durable restricted ingress fence (%i)
+DefaultDependencies=no
+Requires=hospital-dr-dump-readonly-fence.service
+After=local-fs.target hospital-dr-dump-readonly-fence.service
+Before=network-pre.target docker.service nginx.service apache2.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hospital-dr-dump-external-fence ensure-service-authorized --authorization-file=/var/lib/hospital-dr-dump-service-fence/%i.json
+RemainAfterExit=yes
+
+[Install]
+WantedBy=network-pre.target

@@ -1,0 +1,152 @@
+---
+- name: "Initialize DR EMR document deployment variables / DR EMR 문서 서비스 배포 변수 초기화"
+  set_fact:
+    emr_app_dir: "/home/ubuntu/hospital-emr"
+    emr_db_host: "{{ hostvars[groups['db_servers'][0]].ansible_host | default(groups['db_servers'][0]) }}"
+
+- name: "Validate DR EMR secrets / DR EMR secret 검증"
+  assert:
+    that:
+      - lookup('env', 'DOC_DB_PASSWORD') | length > 0
+    fail_msg: "Missing required secret: "<SET_IN_SECRET_STORE>" Set it in /home/cloud/hospital-dr-secrets/dr.env."
+
+- name: "Install Apache, Node.js prerequisites, and rsync / Apache, Node.js 사전 패키지 및 rsync 설치"
+  apt:
+    name: ['apache2', 'curl', 'rsync']
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: "Configure Node.js package repository / Node.js 패키지 저장소 구성"
+  shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  become: yes
+
+- name: "Install Node.js runtime / Node.js 런타임 설치"
+  apt:
+    name: ['nodejs']
+    state: present
+  become: yes
+
+- name: "Install PM2 process manager globally / PM2 프로세스 매니저 전역 설치"
+  npm:
+    name: pm2
+    global: yes
+  become: yes
+
+- name: "Create DR EMR application directory / DR EMR 애플리케이션 디렉토리 생성"
+  file:
+    path: "{{ emr_app_dir }}"
+    state: directory
+    owner: "ubuntu"
+    group: "ubuntu"
+    mode: '0755'
+  become: yes
+
+- name: "Synchronize EMR application source / EMR 애플리케이션 소스 동기화"
+  synchronize:
+    src: "{{ role_path }}/files/emr/"
+    dest: "{{ emr_app_dir }}/"
+    delete: yes
+    use_ssh_args: yes
+    rsync_opts:
+      - "--exclude=node_modules"
+      - "--exclude=.env"
+
+- name: "Normalize EMR application ownership and permissions / EMR 애플리케이션 소유권 및 권한 정리"
+  file:
+    path: "{{ emr_app_dir }}"
+    owner: "ubuntu"
+    group: "ubuntu"
+    mode: "u=rwX,g=rX,o=rX"
+    recurse: yes
+  become: yes
+
+- name: "Render EMR application environment file / EMR 애플리케이션 환경 파일 생성"
+  copy:
+    dest: "{{ emr_app_dir }}/.env"
+    content: |
+      PORT=3000
+      DB_HOST={{ emr_db_host }}
+      DB_PORT=3306
+      DB_USER=root
+      DB_PASSWORD={{ lookup('env', 'DOC_DB_PASSWORD') }}
+      DB_NAME=hospital_db
+    owner: "ubuntu"
+    group: "ubuntu"
+    mode: '0600'
+  become: yes
+
+- name: "Install EMR production Node.js dependencies / EMR 운영용 Node.js 의존성 설치"
+  npm:
+    path: "{{ emr_app_dir }}"
+    production: yes
+    state: present
+  become: yes
+  become_user: "ubuntu"
+
+- name: "Start DR EMR application under PM2 supervision / PM2로 DR EMR 애플리케이션 시작"
+  shell: |
+    pm2 delete hospital-emr || true
+    pm2 start server.js --name "hospital-emr" --update-env
+    pm2 save
+  args:
+    chdir: "{{ emr_app_dir }}"
+  environment:
+    PORT: "3000"
+    DB_HOST: "{{ emr_db_host }}"
+    DB_PORT: "3306"
+    DB_USER: "root"
+    DB_PASSWORD: "{{ lookup('env', 'DOC_DB_PASSWORD') }}"
+    DB_NAME: "hospital_db"
+  become: yes
+  become_user: "ubuntu"
+
+- name: "Register EMR PM2 as a system startup service / EMR PM2 시스템 부팅 서비스 등록"
+  command: pm2 startup systemd -u ubuntu --hp /home/ubuntu
+  become: yes
+  changed_when: false
+
+- name: "Hand EMR PM2 daemon ownership to systemd / EMR PM2 daemon 관리 권한을 systemd로 전환"
+  command: pm2 kill
+  become: yes
+  become_user: "ubuntu"
+  changed_when: true
+
+- name: "Enable EMR restoration after reboot / 재부팅 후 EMR 자동 복구 활성화"
+  systemd:
+    name: pm2-ubuntu
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  become: yes
+
+- name: "Enable Apache proxy modules for EMR / EMR용 Apache proxy 모듈 활성화"
+  shell: |
+    a2enmod proxy proxy_http headers rewrite
+  become: yes
+
+- name: "Configure Apache reverse proxy for EMR / EMR Apache reverse proxy 구성"
+  copy:
+    dest: /etc/apache2/sites-available/hospital-emr.conf
+    content: |
+      <VirtualHost *:80>
+          ServerName hospital-emr.local
+          ProxyPreserveHost On
+          ProxyPass / http://IP_REDACTED:3000/
+          ProxyPassReverse / http://IP_REDACTED:3000/
+          ErrorLog ${APACHE_LOG_DIR}/hospital-emr-error.log
+          CustomLog ${APACHE_LOG_DIR}/hospital-emr-access.log combined
+      </VirtualHost>
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: "Enable Apache EMR site and disable default site / Apache EMR 사이트 활성화 및 기본 사이트 비활성화"
+  shell: |
+    a2dissite 000-default.conf || true
+    a2ensite hospital-emr.conf
+    apache2ctl configtest
+    systemctl enable apache2
+    systemctl reload apache2 || systemctl restart apache2
+  become: yes

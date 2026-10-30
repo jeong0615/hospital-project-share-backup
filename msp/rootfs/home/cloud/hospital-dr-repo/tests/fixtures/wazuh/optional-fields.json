@@ -1,0 +1,4 @@
+{
+  "rule": {"id": "100903", "level": "13", "description": "Critical event"},
+  "agent": {"name": "EMR_Server"}
+}

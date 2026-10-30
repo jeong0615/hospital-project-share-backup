@@ -1,0 +1,42 @@
+apiVersion: 1
+
+datasources:
+  - name: Wazuh-Indexer-ReadOnly
+    type: elasticsearch
+    access: proxy
+    url: ${WAZUH_INDEXER_URL}
+    basicAuth: true
+    basicAuthUser: ${WAZUH_INDEXER_USER}
+    jsonData:
+      index: wazuh-alerts-*
+      # Wazuh 4.8 alert documents use `timestamp`; @timestamp is not the
+      # canonical field in this index and causes empty Grafana panels.
+      timeField: "timestamp"
+      esVersion: "7.10.0"
+      tlsAuthWithCACert: true
+      tlsSkipVerify: false
+      logMessageField: rule.description
+      logLevelField: rule.level
+    secureJsonData:
+      basicAuthPassword: ${WAZUH_INDEXER_PASSWORD}
+      tlsCACert: |
+        -----BEGIN CERTIFICATE-----
+        MIIDSzCCAjOgAwIBAgIUIx0OOfJPNjNDKJPj2PRNShmmlhMwDQYJKoZIhvcNAQEL
+        BQAwNTEOMAwGA1UECwwFV2F6dWgxDjAMBgNVBAoMBVdhenVoMRMwEQYDVQQHDApD
+        YWxpZm9ybmlhMB4XDTI2MDQyMzA3MDE0OFoXDTM2MDQyMDA3MDE0OFowNTEOMAwG
+        A1UECwwFV2F6dWgxDjAMBgNVBAoMBVdhenVoMRMwEQYDVQQHDApDYWxpZm9ybmlh
+        MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsSnfuY5IOyLhb0DY23Vb
+        JUAA9ykvt20tpnEXwEYmdxYGIKpf9W0NfEw9nvKdNYXDX/vHD3vjUJi2xNwVLv0v
+        gWIommTYfZbzvHh2xkc0fQNb/kbz330eGPx+tW2Wl9vqKjO+7GvyWj2GSYGjOtX6
+        3L3MBNHqlt0+ExdBVjq46TLaeSzgNiD/LdZ6GSRQh4Fm4J8I36rFkIW5LjsfZkl3
+        6yfsWZKslksf7lTwpAoxtTMYrMElSyLSb2IXery3PM8yZXzmrleUiXDNWcMy6xpM
+        kkc8e4nCbcbVNZ2DRaoNeEnOq8HdrboigXQuBfL1NQPL7jMrjiLNYDLIsIvGQXTb
+        NQIDAQABo1MwUTAdBgNVHQ4EFgQU+yfovDDK7/j/ePwi1A1A0d+k/eowHwYDVR0j
+        BBgwFoAU+yfovDDK7/j/ePwi1A1A0d+k/eowDwYDVR0TAQH/BAUwAwEB/zANBgkq
+        hkiG9w0BAQsFAAOCAQEATUE8sjt4O/movibxD4GxNQ9cjd0cPAA5e50mwnojsy4j
+        XcylDKgsknAjObU3eV5czWvmAAF51wIQi4DHLLSWu2cQqIVtFORBL6a5w0P38TmS
+        ar1VMysASiVBYM26KbWNepOch6afgT4Wfjtt2NFqFMc4FO//R9l8ekr6xlOqo5XQ
+        eaAC3LZH5xd/hIQ17KK3PA2k2E9L+nVEGJg1QMoiy+FI+aANo8IwZeB/5JHc9BmF
+        9VEy09f5NZyWy66+GmvFDE+swZ7bwztkKIqObSRQqY0PmWuXqNLxMsnGmxWSEEVe
+        KKBw8YcCkpRm30gzlWAq3jmtxMYOxosIJ+Hkvccwow==
+        -----END CERTIFICATE-----

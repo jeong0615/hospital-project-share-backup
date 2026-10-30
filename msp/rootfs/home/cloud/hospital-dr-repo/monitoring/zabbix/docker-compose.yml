@@ -1,0 +1,50 @@
+version: '3.5'
+services:
+  zabbix-db:
+    image: postgres:14-alpine
+    restart: always
+    volumes:
+      - ./zbx_db_data:/var/lib/postgresql/data:rw
+    env_file:
+      - .env_db_pgsql
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:6.0-ubuntu-latest
+    restart: always
+    ports:
+      - "10051:10051"
+    volumes:
+      - ./zbx_snmptraps:/var/lib/zabbix/snmptraps:rw
+      - ../../operations/chatops/send_slack.sh:/usr/lib/zabbix/alertscripts/send_slack.sh:ro
+      - ../../operations/chatops/send_failback.sh:/usr/lib/zabbix/alertscripts/send_failback.sh:ro
+    environment:
+      CHATOPS_REQUEST_URL: http://IP_REDACTED:5001/chatops/request
+    env_file:
+      - .env_db_pgsql
+      - .env_srv
+    depends_on:
+      - zabbix-db
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:6.0-ubuntu-latest
+    restart: always
+    ports:
+      - "80:8080"
+      - "443:8443"
+    env_file:
+      - .env_db_pgsql
+      - .env_web
+    depends_on:
+      - zabbix-db
+
+  zabbix-agent:
+    image: zabbix/zabbix-agent:6.0-ubuntu-latest
+    restart: always
+    ports:
+      - "10050:10050"
+    env_file:
+      - .env_srv
+    environment:
+      - ZBX_SERVER_HOST=zabbix-zabbix-server-1
+      - ZBX_HOSTNAME=Zabbix server
+    privileged: true

@@ -1,0 +1,147 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Wazuh Alerts",
+      "description": "Real indexed Wazuh alert documents in the selected time range.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Wazuh High / Critical",
+      "description": "Indexed Wazuh events with rule level 10 or higher; no synthetic events are included.",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "rule.level:[10 TO *]", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Wazuh Alerts by Agent",
+      "description": "Agent names from the Wazuh Indexer; disconnected live agents do not create synthetic PASS values.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "alias": "hospital-db", "query": "agent.name:hospital-db", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "B", "alias": "hospital-emr", "query": "agent.name:hospital-emr", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "C", "alias": "hospital-web", "query": "agent.name:hospital-web", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "D", "alias": "wazuh.manager", "query": "agent.name:wazuh.manager", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Zabbix Server Availability",
+      "description": "Actual Zabbix Server host agent availability. On-Prem host runtime and shared-path classification are shown separately in the infrastructure dashboard.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 8},
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "fieldConfig": {"defaults": {"unit": "short", "mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "group": {"filter": "Zabbix servers"}, "host": {"filter": "Zabbix server"}, "item": {"filter": "Linux: Zabbix agent availability"}, "resultFormat": "time_series"}]
+    },
+    {
+      "id": 5,
+      "type": "text",
+      "title": "DevSecOps Evidence",
+      "description": "Latest GitHub Actions security summary stored in the separate DevSecOps Indexer index.",
+      "gridPos": {"h": 8, "w": 9, "x": 6, "y": 8},
+      "options": {"mode": "markdown", "content": "## GitHub Actions\n\n**Source:** `hospital-devsecops-executions` via the existing Wazuh Indexer.\n\nThe dashboard shows only collector-indexed completed runs. Missing scan fields remain unavailable; no CI result is synthesized."}
+    },
+    {
+      "id": 6,
+      "type": "text",
+      "title": "DR / RPO State",
+      "description": "DR state and RTO are sourced from the existing Zabbix automation dashboard. Direct Native Replication is not complete.",
+      "gridPos": {"h": 8, "w": 9, "x": 15, "y": 8},
+      "options": {"mode": "markdown", "content": "## DR status\n\nSee **Hospital DR Automation** and **Hospital DR RTO / RPO Readiness** for Zabbix-backed state and RTO timeline.\n\n**RPO:** `NR NOT READY`\n\nDirect Native Replication remains blocked by the On-Prem pfSense TCP/3306 path; no synthetic lag or zero-loss value is shown."}
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "DevSecOps Runs",
+      "description": "Number of real GitHub Actions runs ingested into the DevSecOps index.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 16},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALDEVSECOPS"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "source:github-actions", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Trivy HIGH Findings",
+      "description": "Sum of real Trivy HIGH findings reported by indexed CI summaries.",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 16},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALDEVSECOPS"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "trivy_high:[0 TO *]", "timeField": "timestamp", "metrics": [{"id": "1", "type": "sum", "field": "trivy_high"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Trivy CRITICAL Findings",
+      "description": "Sum of real Trivy CRITICAL findings reported by indexed CI summaries.",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 16},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALDEVSECOPS"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "trivy_critical:[0 TO *]", "timeField": "timestamp", "metrics": [{"id": "1", "type": "sum", "field": "trivy_critical"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 10,
+      "type": "logs",
+      "title": "Latest DevSecOps Runs",
+      "description": "Real indexed run documents include commit SHA, checks, and immutable image digests.",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 21},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALDEVSECOPS"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
+      "targets": [{"refId": "A", "query": "source:github-actions", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Correlated Security Incidents",
+      "description": "Real deterministic incidents derived from indexed Wazuh alerts; zero means no matching real pair was found.",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 30},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALSECURITYINCIDENTS"},
+      "fieldConfig": {"defaults": {"unit": "short", "mappings": [{"type": "value", "options": {"0": {"text": "NO CORRELATED INCIDENTS", "color": "gray"}}}]}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}},
+      "targets": [{"refId": "A", "query": "severity:HIGH", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 12,
+      "type": "text",
+      "title": "Latest Correlated Incidents",
+      "description": "No correlated incident documents are currently indexed; raw Wazuh alerts remain available in the security dashboards.",
+      "gridPos": {"h": 9, "w": 16, "x": 8, "y": 30},
+      "options": {"mode": "markdown", "content": "# NO CORRELATED INCIDENTS\n\nThe normalized incident index currently contains no HIGH incident documents. This explicit state replaces an ambiguous No data panel."}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["MSP", "DR", "Security", "DevSecOps", "Wazuh", "Zabbix"],
+  "templating": {"list": []},
+  "time": {"from": "now-30d", "to": "now"},
+  "timezone": "browser",
+  "title": "Hospital DR Security Operations",
+  "uid": "hospital-dr-security-operations",
+  "version": 1
+}

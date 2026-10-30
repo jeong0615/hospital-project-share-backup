@@ -1,0 +1,12 @@
+{
+  "EventID": "zbx-event-1001",
+  "TriggerID": "zbx-trigger-db-3306",
+  "Host": "DB_Server",
+  "Severity": "HIGH",
+  "Status": "PROBLEM",
+  "Value": "0",
+  "Subject": "MySQL service unavailable",
+  "Message": "The monitored database health check failed.",
+  "Item": "net.tcp.service[tcp,,3306]",
+  "Timestamp": "2026-09-07T12:00:00+09:00"
+}

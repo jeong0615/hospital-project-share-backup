@@ -1,0 +1,26 @@
+[Unit]
+Description=Hospital DR DevSecOps and Wazuh incident indexer collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/cloud/hospital-dr-codex
+EnvironmentFile=-/home/cloud/grafana/.env
+Environment=GITHUB_REPOSITORY=jeong0615/hospital-ci-cd
+Environment=DEVSECOPS_INDEX=hospital-devsecops-executions
+Environment=WAZUH_INCIDENTS_INDEX=hospital-security-incidents
+Environment=DEVSECOPS_INDEXER_URL=https://wazuh.indexer:9200
+Environment=DEVSECOPS_INDEXER_CREDENTIAL_SOURCE=/home/cloud/wazuh-docker/single-node/docker-compose.yml
+Environment=DEVSECOPS_INDEXER_CONNECT_IP=IP_REDACTED
+Environment=DEVSECOPS_INDEXER_HOST_HEADER=wazuh.indexer
+Environment=DEVSECOPS_INDEXER_CA_SOURCE=/home/cloud/hospital-dr-codex/monitoring/grafana/provisioning/datasources/wazuh.yml
+ExecStart=/usr/bin/python3 /home/cloud/hospital-dr-codex/operations/security/devsecops_indexer_collector.py --repository jeong0615/hospital-ci-cd
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=default.target

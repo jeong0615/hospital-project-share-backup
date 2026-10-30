@@ -1,0 +1,592 @@
+---
+- name: Validate the exact Dump public-readiness operation
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse any phase or target outside the single approved Dump cutover
+      ansible.builtin.assert:
+        that:
+          - groups['web_servers'] | default([]) == ['dr-web']
+          - groups['doc_servers'] | default([]) == ['dr-doc']
+          - groups['isolated_dump_restore'] | default([]) == ['isolated-dump-restore']
+          - dump_public_phase in ['verify', 'maintenance', 'open-network', 'verify-prepared', 'rollback']
+          - dump_public_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_public_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_public_private_ip is match('^10[.]20[.]30[.](?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+          - dump_public_private_ip not in ['IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED']
+          - dump_public_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_public_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_public_data_volume_id != dump_public_stage_volume_id
+          - dump_public_service_sg_id is match('^sg-[0-9a-f]{8,32}$')
+          - dump_public_expected_sha256 is match('^[0-9a-f]{64}$')
+          - dump_public_backup_id is match('^db_backup_[0-9]{8}_[0-9]{4,6}[.]sql[.]gz[.]enc$')
+          - dump_public_promotion_id is match('^[0-9a-f-]{36}$')
+          - dump_public_cutover_id is match('^[0-9a-f-]{36}$')
+        fail_msg: Dump public-readiness identity or phase is invalid.
+
+- name: Revalidate database receipts and live read-only-safe state
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_public_lib: /usr/local/lib/hospital-dr-dump-readonly-health
+    dump_public_host_cli: "{{ dump_public_lib }}/dump_db_readonly_health_host.py"
+  tasks:
+    - name: Install the reviewed read-only verifier and its local dependencies
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - src: "{{ playbook_dir }}/../../operations/db/dump_db_readonly_health_host.py"
+          dest: "{{ dump_public_host_cli }}"
+        - src: "{{ playbook_dir }}/../../operations/db/isolated_db_service_host.py"
+          dest: "{{ dump_public_lib }}/isolated_db_service_host.py"
+        - src: "{{ playbook_dir }}/../../operations/db/isolated_restore_host.py"
+          dest: "{{ dump_public_lib }}/isolated_restore_host.py"
+      when: dump_public_phase == 'verify'
+
+    - name: Verify exact deployed verifier checksums
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop:
+        - path: "{{ dump_public_host_cli }}"
+          expected: "{{ dump_public_host_cli_sha256 }}"
+        - path: "{{ dump_public_lib }}/isolated_db_service_host.py"
+          expected: "{{ dump_public_db_helper_sha256 }}"
+        - path: "{{ dump_public_lib }}/isolated_restore_host.py"
+          expected: "{{ dump_public_restore_helper_sha256 }}"
+      register: dump_public_db_helper_stats
+      changed_when: false
+      when: dump_public_phase == 'verify'
+
+    - name: Require exact root-owned DB verification helpers
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.checksum == item.item.expected
+        fail_msg: The isolated DB verifier differs from the reviewed source.
+      loop: "{{ dump_public_db_helper_stats.results }}"
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+    - name: Revalidate restore, service, promotion, health receipts and live MySQL without writes
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_public_host_cli }}"
+          - verify-public-readiness
+          - --instance-id
+          - "{{ dump_public_instance_id }}"
+          - --private-ip
+          - "{{ dump_public_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_public_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_public_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_public_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_public_backup_id }}"
+          - --promotion-id
+          - "{{ dump_public_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_public_cutover_id }}"
+      register: dump_public_db_verification
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+    - name: Publish only the safe DB identity fields to later plays
+      ansible.builtin.set_fact:
+        dump_public_db_result: "{{ dump_public_db_verification.stdout | from_json }}"
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+- name: Verify running Web and EMR apps before any ingress change
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_public_app_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+    dump_public_app_container: "{{ 'hospital-dr-web' if dump_public_app_kind == 'web' else 'hospital-dr-emr' }}"
+  tasks:
+    - name: Verify app container identity, loopback port, current strict fence, and restart policy
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/hospital-dr-dump-app-fence-probe
+          - --kind
+          - "{{ dump_public_app_kind }}"
+          - --cutover-id
+          - "{{ dump_public_cutover_id }}"
+          - --isolated-private-ip
+          - "{{ dump_public_private_ip }}"
+          - --mode
+          - readonly-active
+          - --db-server-uuid
+          - "{{ hostvars['isolated-dump-restore'].dump_public_db_result.db_server_uuid }}"
+      register: dump_public_app_contract
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+    - name: Require the active app to remain externally fenced and loopback-only
+      ansible.builtin.assert:
+        that:
+          - (dump_public_app_contract.stdout | from_json).status == 'PASS'
+          - (dump_public_app_contract.stdout | from_json).cutover_id == dump_public_cutover_id
+          - (dump_public_app_contract.stdout | from_json).db_host == dump_public_private_ip
+          - (dump_public_app_contract.stdout | from_json).db_port | int == 3307
+          - (dump_public_app_contract.stdout | from_json).db_server_uuid == hostvars['isolated-dump-restore'].dump_public_db_result.db_server_uuid
+          - (dump_public_app_contract.stdout | from_json).external_fence | bool
+          - (dump_public_app_contract.stdout | from_json).health_endpoint == '/__hospital_dr/health'
+        fail_msg: An app no longer matches the verified read-only Dump cutover.
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+    - name: Run the bodyless local health endpoint only
+      ansible.builtin.uri:
+        url: http://IP_REDACTED:3000/__hospital_dr/health
+        method: GET
+        status_code: 204
+        timeout: 10
+        return_content: false
+      register: dump_public_local_health
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+    - name: Recheck connected DB UUID and SELECT-only app grants without exposing values
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -i
+          - -e
+          - "DR_EXPECTED_APP_KIND={{ dump_public_app_kind }}"
+          - -e
+          - "DR_EXPECTED_DB_HOST={{ dump_public_private_ip }}"
+          - -e
+          - "DR_EXPECTED_DB_SERVER_UUID={{ hostvars['isolated-dump-restore'].dump_public_db_result.db_server_uuid }}"
+          - "{{ dump_public_app_container }}"
+          - node
+          - -
+        stdin: "{{ lookup('file', playbook_dir ~ '/../../operations/db/dump_db_readonly_app_probe.js') }}"
+        stdin_add_newline: false
+      register: dump_public_app_db_probe
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+    - name: Require SELECT-only connection to this isolated DB identity
+      ansible.builtin.assert:
+        that:
+          - dump_public_app_db_probe.rc == 0
+          - "'DUMP_APP_DB_PROBE=PASS identity=true privileges=SELECT_ONLY' in dump_public_app_db_probe.stdout"
+          - dump_public_local_health.status | int == 204
+        fail_msg: The app DB endpoint or read-only application contract is invalid.
+      no_log: true
+      when: dump_public_phase == 'verify'
+
+- name: Install maintenance mode and bounded self-expiring fence timers
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    dump_public_expiry_unit: "hospital-dr-dump-expire-{{ dump_public_cutover_id | replace('-', '') }}"
+  tasks:
+    - name: Install the reviewed strict/prepared firewall helper before any opening
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../operations/db/dump_db_external_fence.py"
+        dest: /usr/local/sbin/hospital-dr-dump-external-fence
+        owner: root
+        group: root
+        mode: "0750"
+      when: dump_public_phase == 'maintenance'
+
+    - name: Verify the installed firewall helper checksum
+      ansible.builtin.stat:
+        path: /usr/local/sbin/hospital-dr-dump-external-fence
+        checksum_algorithm: sha256
+      register: dump_public_fence_helper_stat
+      changed_when: false
+      when: dump_public_phase == 'maintenance'
+
+    - name: Require the reviewed firewall helper
+      ansible.builtin.assert:
+        that:
+          - dump_public_fence_helper_stat.stat.exists
+          - dump_public_fence_helper_stat.stat.isreg
+          - not dump_public_fence_helper_stat.stat.islnk
+          - dump_public_fence_helper_stat.stat.pw_name == 'root'
+          - dump_public_fence_helper_stat.stat.checksum == dump_public_fence_helper_sha256
+        fail_msg: Installed firewall helper is not the reviewed version.
+      when: dump_public_phase == 'maintenance'
+
+    - name: Install a default-maintenance map and per-operation authenticated probe key
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/hospital-dr-dump-mode.conf
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # hospital-dr-dump-cutover={{ dump_public_cutover_id }}
+          map $host $hospital_dr_dump_maintenance {
+              default 1;
+          }
+          map $hospital_dr_dump_maintenance $hospital_dr_dump_maintenance_cache_control {
+              default "";
+              1 "no-store, private";
+          }
+          map $http_x_hospital_dr_probe $hospital_dr_dump_probe_authorized {
+              default 0;
+              "{{ dump_public_probe_token }}" 1;
+          }
+      no_log: true
+      when: dump_public_phase == 'maintenance' and 'web_servers' in group_names
+
+    - name: Install the bounded readiness expiry helper
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../operations/db/dump_db_public_readiness_expire.py"
+        dest: /usr/local/sbin/hospital-dr-dump-public-expire
+        owner: root
+        group: root
+        mode: "0750"
+      when: dump_public_phase == 'maintenance'
+
+    - name: Verify the bounded readiness expiry helper checksum
+      ansible.builtin.stat:
+        path: /usr/local/sbin/hospital-dr-dump-public-expire
+        checksum_algorithm: sha256
+      register: dump_public_expiry_helper_stat
+      changed_when: false
+      when: dump_public_phase == 'maintenance'
+
+    - name: Require the reviewed expiry helper before scheduling closure
+      ansible.builtin.assert:
+        that:
+          - dump_public_expiry_helper_stat.stat.exists
+          - dump_public_expiry_helper_stat.stat.isreg
+          - not dump_public_expiry_helper_stat.stat.islnk
+          - dump_public_expiry_helper_stat.stat.pw_name == 'root'
+          - dump_public_expiry_helper_stat.stat.checksum == dump_public_expiry_helper_sha256
+        fail_msg: The reviewed time-bounded fence expiry helper is not installed.
+      when: dump_public_phase == 'maintenance'
+
+    - name: Validate Nginx configuration without printing configuration content
+      ansible.builtin.command: nginx -t
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'maintenance' and 'web_servers' in group_names
+
+    - name: Reload Nginx with user maintenance still enabled
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      no_log: true
+      when: dump_public_phase == 'maintenance' and 'web_servers' in group_names
+
+    - name: Verify the origin refuses normal traffic and unauthenticated health probes
+      ansible.builtin.uri:
+        url: "https://IP_REDACTED{{ item.path }}"
+        method: GET
+        headers:
+          Host: "{{ item.host }}"
+        status_code: "{{ item.status | int }}"
+        validate_certs: false
+        timeout: 10
+        return_content: true
+      loop:
+        - { host: "{{ dump_public_web_domain }}", path: "/", status: 503 }
+        - { host: "{{ dump_public_web_domain }}", path: "/__hospital_dr/health", status: 404 }
+        - { host: "{{ dump_public_web_domain }}", path: "/emr/", status: 503 }
+        - { host: "{{ dump_public_emr_domain }}", path: "/", status: 503 }
+        - { host: "{{ dump_public_emr_domain }}", path: "/__hospital_dr/health", status: 404 }
+      register: dump_public_maintenance_http
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'maintenance' and 'web_servers' in group_names
+
+    - name: Require maintenance responses and no-cache policy on every public hostname
+      ansible.builtin.assert:
+        that:
+          - dump_public_maintenance_http.results | length == 5
+          - item.status | int == item.item.status | int
+          - item.headers['cache-control'] is defined
+          - "'no-store' in item.headers['cache-control']"
+        fail_msg: The Dump maintenance response is not active on every application route.
+      loop: "{{ dump_public_maintenance_http.results }}"
+      no_log: true
+      when: dump_public_phase == 'maintenance' and 'web_servers' in group_names
+
+    - name: Schedule an automatic strict fence on this host before ingress is opened
+      ansible.builtin.command:
+        argv:
+          - systemd-run
+          - "--unit={{ dump_public_expiry_unit }}"
+          - "--on-active={{ dump_public_ttl_seconds }}s"
+          - --timer-property=AccuracySec=1s
+          - --collect
+          - /usr/local/sbin/hospital-dr-dump-public-expire
+          - "--role={{ 'web' if 'web_servers' in group_names else 'emr' }}"
+          - "--cutover-id={{ dump_public_cutover_id }}"
+      register: dump_public_timer_create
+      changed_when: dump_public_timer_create.rc == 0
+      when: dump_public_phase == 'maintenance'
+
+    - name: Verify this host has an active cutover expiry timer
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ dump_public_expiry_unit }}.timer"]
+      register: dump_public_timer_state
+      changed_when: false
+      when: dump_public_phase == 'maintenance'
+
+    - name: Require the expiry timer before any firewall preparation
+      ansible.builtin.assert:
+        that:
+          - dump_public_timer_create.rc == 0
+          - dump_public_timer_state.stdout | trim == 'active'
+        fail_msg: The bounded fence expiry timer is not active.
+      when: dump_public_phase == 'maintenance'
+
+- name: Open only the EMR-from-Web and Cloudflare-to-Web transport
+  hosts: doc_servers
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Open only Web private IP to EMR TCP 80 after all readiness gates
+      ansible.builtin.command:
+        argv: "{{ ['/usr/local/sbin/hospital-dr-dump-external-fence', 'prepare', '--role', 'emr', '--cutover-id', dump_public_cutover_id] + (dump_public_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}"
+      register: dump_public_emr_fence
+      changed_when: true
+      when: dump_public_phase == 'open-network'
+
+- name: Open only Cloudflare IPv4 to Web TCP 443
+  hosts: web_servers
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Reassert maintenance before allowing Cloudflare-origin HTTPS
+      ansible.builtin.uri:
+        url: https://IP_REDACTED/
+        method: GET
+        headers:
+          Host: "{{ dump_public_web_domain }}"
+        status_code: 503
+        validate_certs: false
+        timeout: 10
+        return_content: false
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'open-network'
+
+    - name: Open only configured Cloudflare IPv4 CIDRs to Web TCP 443
+      ansible.builtin.command:
+        argv: "{{ ['/usr/local/sbin/hospital-dr-dump-external-fence', 'prepare', '--role', 'web', '--cutover-id', dump_public_cutover_id] + (dump_public_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}"
+      register: dump_public_web_fence
+      changed_when: true
+      when: dump_public_phase == 'open-network'
+
+- name: Verify the prepared fence and non-identifying authenticated endpoints
+  hosts: web_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify the exact Cloudflare-only IPv4 prepared firewall contract
+      ansible.builtin.command:
+        argv: "{{ ['/usr/local/sbin/hospital-dr-dump-external-fence', 'verify-prepared', '--role', 'web', '--cutover-id', dump_public_cutover_id] + (dump_public_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}"
+      register: dump_public_web_fence_verified
+      changed_when: false
+      when: dump_public_phase == 'verify-prepared'
+
+    - name: Verify the Web service returns maintenance without the probe credential
+      ansible.builtin.uri:
+        url: https://IP_REDACTED/
+        method: GET
+        headers:
+          Host: "{{ dump_public_web_domain }}"
+        status_code: 503
+        validate_certs: false
+        timeout: 10
+        return_content: false
+      register: dump_public_web_maintenance_verified
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify-prepared'
+
+    - name: Verify the Web health response is authenticated, bodyless, and cache-disabled
+      ansible.builtin.uri:
+        url: https://IP_REDACTED/__hospital_dr/health
+        method: GET
+        headers:
+          Host: "{{ dump_public_web_domain }}"
+          X-Hospital-DR-Probe: "{{ dump_public_probe_token }}"
+        status_code: 204
+        validate_certs: false
+        timeout: 10
+        return_content: true
+      register: dump_public_web_probe
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify-prepared'
+
+    - name: Verify Web proxy to EMR health is authenticated and non-identifying
+      ansible.builtin.uri:
+        url: https://IP_REDACTED/emr/__hospital_dr/health
+        method: GET
+        headers:
+          Host: "{{ dump_public_web_domain }}"
+          X-Hospital-DR-Probe: "{{ dump_public_probe_token }}"
+        status_code: 204
+        validate_certs: false
+        timeout: 10
+        return_content: true
+      register: dump_public_emr_proxy_probe
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify-prepared'
+
+    - name: Verify EMR host health proxy is authenticated and non-identifying
+      ansible.builtin.uri:
+        url: https://IP_REDACTED/__hospital_dr/health
+        method: GET
+        headers:
+          Host: "{{ dump_public_emr_domain }}"
+          X-Hospital-DR-Probe: "{{ dump_public_probe_token }}"
+        status_code: 204
+        validate_certs: false
+        timeout: 10
+        return_content: true
+      register: dump_public_emr_domain_probe
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify-prepared'
+
+    - name: Verify normal EMR and patient routes remain in maintenance mode
+      ansible.builtin.uri:
+        url: "https://IP_REDACTED{{ item.path }}"
+        method: GET
+        headers:
+          Host: "{{ item.host }}"
+        status_code: 503
+        validate_certs: false
+        timeout: 10
+        return_content: false
+      loop:
+        - { host: "{{ dump_public_web_domain }}", path: "/emr/" }
+        - { host: "{{ dump_public_emr_domain }}", path: "/" }
+      register: dump_public_emr_maintenance_verified
+      changed_when: false
+      no_log: true
+      when: dump_public_phase == 'verify-prepared'
+
+    - name: Require exact fence marker and non-identifying health responses
+      ansible.builtin.assert:
+        that:
+          - dump_public_web_fence_verified.rc == 0
+          - "'DUMP_PUBLIC_READINESS_FENCE=PASS' in dump_public_web_fence_verified.stdout"
+          - dump_public_web_maintenance_verified.status | int == 503
+          - dump_public_web_probe.status | int == 204
+          - dump_public_emr_proxy_probe.status | int == 204
+          - dump_public_emr_domain_probe.status | int == 204
+          - (dump_public_web_probe.content | default('')) == ''
+          - (dump_public_emr_proxy_probe.content | default('')) == ''
+          - (dump_public_emr_domain_probe.content | default('')) == ''
+          - "'set-cookie' not in (dump_public_web_probe.headers | default({}))"
+          - "'set-cookie' not in (dump_public_emr_proxy_probe.headers | default({}))"
+          - "'set-cookie' not in (dump_public_emr_domain_probe.headers | default({}))"
+        fail_msg: Dump public readiness endpoint or maintenance/fence contract failed.
+      no_log: true
+      when: dump_public_phase == 'verify-prepared'
+
+- name: Verify prepared EMR rule and recover to strict fence on rollback
+  hosts: doc_servers:web_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  ignore_unreachable: false
+  tasks:
+    - name: Verify the exact Web-only EMR TCP 80 ingress rule
+      ansible.builtin.command:
+        argv: "{{ ['/usr/local/sbin/hospital-dr-dump-external-fence', 'verify-prepared', '--role', 'emr', '--cutover-id', dump_public_cutover_id] + (dump_public_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}"
+      register: dump_public_emr_fence_verified
+      changed_when: false
+      when: dump_public_phase == 'verify-prepared' and 'doc_servers' in group_names
+
+    - name: Require the exact prepared EMR fence before reporting readiness
+      ansible.builtin.assert:
+        that:
+          - dump_public_emr_fence_verified.rc == 0
+          - "'DUMP_PUBLIC_READINESS_FENCE=PASS' in dump_public_emr_fence_verified.stdout"
+        fail_msg: EMR ingress is not limited to the Web private address.
+      when: dump_public_phase == 'verify-prepared' and 'doc_servers' in group_names
+
+    - name: Restore strict HTTP(S) deny rule on every app host after any failure
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/hospital-dr-dump-external-fence, restore-strict]
+      register: dump_public_rollback
+      changed_when: dump_public_rollback.rc == 0
+      failed_when: false
+      when: dump_public_phase == 'rollback'
+
+    - name: Verify the strict fence is restored after rollback
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/hospital-dr-dump-external-fence, verify]
+      register: dump_public_rollback_verified
+      changed_when: false
+      failed_when: false
+      when: dump_public_phase == 'rollback'
+
+    - name: Require strict fence restoration
+      ansible.builtin.assert:
+        that:
+          - dump_public_rollback.rc == 0
+          - dump_public_rollback_verified.rc == 0
+          - "'DUMP_READONLY_EXTERNAL_FENCE=PASS' in dump_public_rollback_verified.stdout"
+        fail_msg: Strict ingress fence restoration failed.
+      when: dump_public_phase == 'rollback'
+
+- name: Restore default-disabled Dump maintenance and revoke the probe credential on rollback
+  hosts: web_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Re-fence and revoke the operation probe after failed preparation
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/hospital-dr-dump-public-expire
+          - --role=web
+          - "--cutover-id={{ dump_public_cutover_id }}"
+      register: dump_public_probe_rollback
+      changed_when: dump_public_probe_rollback.rc == 0
+      no_log: true
+      when: dump_public_phase == 'rollback'
+
+    - name: Require the probe token was revoked after firewall recovery
+      ansible.builtin.assert:
+        that:
+          - dump_public_probe_rollback.rc == 0
+          - "'DUMP_PUBLIC_READINESS_EXPIRE=PASS' in dump_public_probe_rollback.stdout"
+        fail_msg: Probe credential revocation failed; the nftables strict fence remains the primary protection.
+      no_log: true
+      when: dump_public_phase == 'rollback'
+
+- name: Emit a non-secret phase marker
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Emit marker only after every phase assertion passed
+      ansible.builtin.debug:
+        msg: "DUMP_PUBLIC_READINESS_REMOTE={{ {'verify': 'VERIFY_PASS', 'maintenance': 'MAINTENANCE_PASS', 'open-network': 'NETWORK_PASS', 'verify-prepared': 'PREPARED_PASS', 'rollback': 'ROLLBACK_PASS'}[dump_public_phase] }}"

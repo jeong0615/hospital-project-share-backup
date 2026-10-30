@@ -1,0 +1,27 @@
+---
+# This role is intentionally opt-in and is never included by site.yml.
+aws_web_nat_instance_enabled: "{{ lookup('env', 'AWS_WEB_NAT_INSTANCE_ENABLED') | default('false', true) | bool }}"
+aws_web_nat_instance_action: apply
+aws_web_nat_instance_expected_instance_id: AWS_RESOURCE_ID_REDACTED
+aws_web_nat_instance_expected_private_ip: AWS_PUBLIC_IP_REDACTED
+aws_web_nat_instance_expected_vpc_id: AWS_RESOURCE_ID_REDACTED
+aws_web_nat_instance_expected_subnet_id: AWS_RESOURCE_ID_REDACTED
+aws_web_nat_instance_expected_eni: AWS_RESOURCE_ID_REDACTED
+aws_web_nat_instance_uplink_interface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
+aws_web_nat_instance_interface: wg-aws-dr
+aws_web_nat_instance_private_cidrs:
+  - IP_REDACTED/24
+  - IP_REDACTED/24
+  - IP_REDACTED/24
+aws_web_nat_instance_excluded_destinations:
+  - IP_REDACTED/16
+  - IP_REDACTED/24
+  - IP_REDACTED/24
+aws_web_nat_instance_forward_chain: HOSPITAL-DR-NAT-FWD
+aws_web_nat_instance_postrouting_chain: HOSPITAL-DR-NAT-POSTROUTING
+aws_web_nat_instance_script: /usr/local/sbin/hospital-dr-web-nat-instance
+aws_web_nat_instance_sysctl_file: /etc/sysctl.d/99-hospital-dr-web-nat.conf
+aws_web_nat_instance_service: hospital-dr-web-nat.service
+aws_web_nat_instance_state_dir: /var/lib/hospital-dr-web-nat-instance
+aws_web_nat_instance_baseline_file: /var/lib/hospital-dr-web-nat-instance/baseline.json
+aws_web_nat_instance_firewall_baseline_file: /var/lib/hospital-dr-web-nat-instance/firewall-baseline

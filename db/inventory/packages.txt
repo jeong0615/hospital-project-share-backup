@@ -1,0 +1,9 @@
+cron 3.0pl1-137ubuntu3
+gzip 1.10-4ubuntu4.2
+mysql-client-8.0 8.0.46-0ubuntuIP_REDACTED
+mysql-common 5.8+1.0.8
+mysql-server 8.0.46-0ubuntuIP_REDACTED
+mysql-server-8.0 8.0.46-0ubuntuIP_REDACTED
+openssh-server 1:8.9p1-3ubuntu0.17
+openssl 3.0.2-0ubuntu1.25
+systemd 249.11-0ubuntu3.22

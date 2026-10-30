@@ -1,0 +1,574 @@
+---
+- name: "Initialize DR web deployment variables / DR Web 배포 변수 초기화"
+  set_fact:
+    web_emr_host: "{{ hostvars[groups['doc_servers'][0]].ansible_host | default(groups['doc_servers'][0]) }}"
+    web_domain: "{{ lookup('env', 'DR_DOMAIN') | default('hospital-web.pp.ua', true) }}"
+    emr_domain: "{{ lookup('env', 'EMR_DOMAIN') | default('emr.hospital-web.pp.ua', true) }}"
+    emr_health_check_header: "{{ lookup('env', 'EMR_HEALTH_CHECK_HEADER') | default('dr-emr-check-2026', true) }}"
+    emr_cf_probe_ip: "{{ lookup('env', 'CF_PROBE_SOURCE_IP') | default('IP_REDACTED', true) }}"
+    emr_allowed_client_ips: "{{ lookup('env', 'EMR_ALLOWED_CLIENT_IPS') | default('', true) }}"
+    web_app_dir: "/etc/hospital-dr"
+    web_image_tag: "{{ lookup('env', 'DR_IMAGE_TAG') | default('', true) }}"
+    web_ecr_region: "{{ lookup('env', 'ECR_REGION') | default(lookup('env', 'AWS_REGION') | default('ap-northeast-2', true), true) }}"
+    web_ecr_registry: "{{ lookup('env', 'ECR_REGISTRY') | default('', true) }}"
+    web_ecr_account_id: "{{ lookup('env', 'ECR_ACCOUNT_ID') | default('', true) }}"
+    web_ecr_repository: "{{ lookup('env', 'ECR_WEB_REPOSITORY') | default('hospital-dr-web', true) }}"
+    web_container_name: "hospital-dr-web"
+    web_tls_cert_source: "{{ lookup('env', 'DR_TLS_CERT_FILE') | default('/home/cloud/hospital-dr-secrets/tls/hospital-web.crt', true) }}"
+    web_tls_key_source: "{{ lookup('env', 'DR_TLS_KEY_FILE') | default('/home/cloud/hospital-dr-secrets/tls/hospital-web.key', true) }}"
+    web_require_production_tls: "{{ (lookup('env', 'REQUIRE_PRODUCTION_TLS') | default('true', true) | lower) == 'true' }}"
+
+- name: "Validate additional EMR client IPv4 allowlist entries / EMR 추가 접근 IPv4 허용 목록 검증"
+  assert:
+    that:
+      - item | trim is match('^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$')
+    fail_msg: "EMR_ALLOWED_CLIENT_IPS must contain comma-separated IPv4 addresses."
+  loop: "{{ emr_allowed_client_ips.split(',') if emr_allowed_client_ips | length > 0 else [] }}"
+  no_log: true
+
+- name: "Resolve the Web application DB endpoint independently of SSH inventory / SSH inventory와 분리된 Web DB endpoint 확인"
+  command:
+    argv:
+      - python3
+      - "{{ lookup('env', 'DR_DB_SERVICE_VALIDATOR') | default(playbook_dir ~ '/../../operations/db/db_service_endpoint.py', true) }}"
+      - --application
+      - web
+  delegate_to: localhost
+  become: false
+  register: web_db_endpoint_result
+  changed_when: false
+
+- name: "Set the validated Web DB endpoint / 검증된 Web DB endpoint 설정"
+  set_fact:
+    web_db_host: "{{ web_db_endpoint_result.stdout_lines[0] }}"
+    web_db_port: "{{ web_db_endpoint_result.stdout_lines[1] }}"
+
+- name: "Validate required Web runtime secrets / Web runtime secret 검증"
+  assert:
+    that:
+      - lookup('env', 'WEB_DB_PASSWORD') | length > 0
+      - lookup('env', 'SESSION_SECRET') | length > 0
+    fail_msg: "WEB_DB_PASSWORD and SESSION_SECRET must be supplied through the external controller environment."
+  no_log: true
+
+- name: "Validate immutable DR web image contract / DR Web immutable image 계약 검증"
+  assert:
+    that:
+      - web_image_tag is match('^[0-9a-fA-F]{40}$')
+    fail_msg: "DR_IMAGE_TAG must be a 40-character commit SHA; mutable tags such as latest are not accepted."
+
+- name: "Validate Web TLS source pairing / Web TLS source 쌍 검증"
+  assert:
+    that:
+      - (web_tls_cert_source | length == 0) == (web_tls_key_source | length == 0)
+      - not (web_require_production_tls | bool) or (web_tls_cert_source | length > 0 and web_tls_key_source | length > 0)
+    fail_msg: "Production Web TLS requires both DR_TLS_CERT_FILE and DR_TLS_KEY_FILE; a partial pair is invalid."
+  no_log: true
+
+- name: "Check Web TLS certificate source on the controller / controller의 Web TLS 인증서 source 확인"
+  stat:
+    path: "{{ web_tls_cert_source if web_tls_cert_source | length > 0 else '/dev/null' }}"
+  delegate_to: localhost
+  become: false
+  register: web_tls_cert_source_stat
+
+- name: "Check Web TLS key source on the controller / controller의 Web TLS key source 확인"
+  stat:
+    path: "{{ web_tls_key_source if web_tls_key_source | length > 0 else '/dev/null' }}"
+  delegate_to: localhost
+  become: false
+  register: web_tls_key_source_stat
+
+- name: "Require readable production Web TLS sources / production Web TLS source 필수 확인"
+  assert:
+    that:
+      - not (web_require_production_tls | bool) or (web_tls_cert_source_stat.stat.exists and web_tls_cert_source_stat.stat.isreg and web_tls_key_source_stat.stat.exists and web_tls_key_source_stat.stat.isreg)
+      - web_tls_cert_source | length == 0 or (web_tls_cert_source_stat.stat.exists and web_tls_cert_source_stat.stat.isreg and (web_tls_cert_source_stat.stat.readable | default(false)))
+      - web_tls_key_source | length == 0 or (web_tls_key_source_stat.stat.exists and web_tls_key_source_stat.stat.isreg and (web_tls_key_source_stat.stat.readable | default(false)))
+    fail_msg: "Configured Web TLS sources must be readable regular files on the Ansible controller."
+  no_log: true
+
+- name: "Install Docker and Web reverse-proxy packages / Docker 및 Web reverse proxy 패키지 설치"
+  apt:
+    name:
+      - awscli
+      - ca-certificates
+      - curl
+      - docker.io
+      - iproute2
+      - nginx
+      - openssl
+    state: present
+    update_cache: yes
+
+- name: "Enable and start Docker / Docker 서비스 활성화 및 시작"
+  service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: "Resolve ECR account from the instance role / 인스턴스 role에서 ECR 계정 확인"
+  command: aws sts get-caller-identity --query Account --output text
+  register: web_ecr_identity
+  changed_when: false
+  when:
+    - web_ecr_registry | length == 0
+    - web_ecr_account_id | length == 0
+
+- name: "Set ECR account from instance identity / 인스턴스 identity로 ECR 계정 설정"
+  set_fact:
+    web_ecr_account_id: "{{ web_ecr_identity.stdout | trim }}"
+  when:
+    - web_ecr_registry | length == 0
+    - web_ecr_account_id | length == 0
+
+- name: "Build ECR registry endpoint / ECR registry endpoint 구성"
+  set_fact:
+    web_ecr_registry: "{{ web_ecr_account_id }}.dkr.ecr.{{ web_ecr_region }}.amazonaws.com"
+  when: web_ecr_registry | length == 0
+
+- name: "Validate ECR registry contract / ECR registry 계약 검증"
+  assert:
+    that:
+      - web_ecr_registry is match('^[0-9]+\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com$')
+    fail_msg: "ECR_REGISTRY or the instance role account could not produce a valid ECR registry endpoint."
+
+- name: "Set immutable DR Web image reference / immutable DR Web image 참조 설정"
+  set_fact:
+    web_image_ref: "{{ web_ecr_registry }}/{{ web_ecr_repository }}:{{ web_image_tag }}"
+
+- name: "Disable legacy PM2 startup unit / 구형 PM2 부팅 unit 비활성화"
+  shell: |
+    set -eu
+    unit=pm2-ubuntu.service
+    if ! systemctl cat "$unit" >/dev/null 2>&1; then
+      echo state=unchanged
+      exit 0
+    fi
+    enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+    active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    if [ "$enabled" = "enabled" ] && [ "$active" = "active" ]; then
+      systemctl disable --now pm2-ubuntu.service
+      echo state=changed
+    elif [ "$active" = "active" ]; then
+      systemctl stop "$unit"
+      echo state=changed
+    elif [ "$enabled" = "enabled" ]; then
+      systemctl disable "$unit"
+      echo state=changed
+    else
+      echo state=unchanged
+    fi
+  args:
+    executable: /bin/bash
+  register: web_pm2_unit
+  changed_when: "'state=changed' in web_pm2_unit.stdout"
+  failed_when: web_pm2_unit.rc != 0
+
+- name: "Remove only the legacy Hospital Web PM2 process / 구형 Hospital Web PM2 프로세스만 제거"
+  shell: |
+    if command -v pm2 >/dev/null 2>&1; then
+      pm2 delete hospital-web >/dev/null 2>&1 || true
+      pm2 save >/dev/null 2>&1 || true
+    fi
+  become_user: ubuntu
+  changed_when: false
+
+- name: "Create external Web runtime directory / 외부 Web runtime 디렉토리 생성"
+  file:
+    path: "{{ web_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: "Render Web runtime environment without exposing secrets / secret 비노출 Web runtime 환경 생성"
+  copy:
+    dest: "{{ web_app_dir }}/hospital-dr-web.env"
+    content: |
+      NODE_ENV=production
+      PORT=3000
+      SERVER_ROLE=dr-web
+      DB_HOST={{ web_db_host }}
+      DB_PORT={{ web_db_port }}
+      DB_USER={{ lookup('env', 'WEB_DB_USER') | default('root', true) }}
+      DB_PASSWORD={{ lookup('env', 'WEB_DB_PASSWORD') }}
+      DB_NAME={{ lookup('env', 'WEB_DB_NAME') | default('hospital_db', true) }}
+      SESSION_SECRET={{ lookup('env', 'SESSION_SECRET') }}
+      COOKIE_SECURE={{ lookup('env', 'WEB_COOKIE_SECURE') | default('true', true) }}
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  register: web_env_file
+
+- name: "Authenticate Docker to ECR using the instance role / 인스턴스 role로 ECR 인증"
+  shell: |
+    set -o pipefail
+    aws ecr get-login-password --region "{{ web_ecr_region }}" | \
+      docker login --username AWS --password-stdin "{{ web_ecr_registry }}"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  no_log: true
+
+- name: "Pull the immutable Web image / immutable Web image pull"
+  command: docker pull "{{ web_image_ref }}"
+  changed_when: false
+
+- name: "Inspect existing Web container without logging its environment / 기존 Web container 환경 비노출 검사"
+  command: docker inspect --format '{% raw %}{{.Config.Image}}|{{.HostConfig.RestartPolicy.Name}}|{{.State.Running}}{% endraw %}' "{{ web_container_name }}"
+  register: web_container_inspect
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "Decode existing Web container metadata / 기존 Web container metadata 해석"
+  set_fact:
+    web_container_image: "{{ web_container_inspect.stdout.split('|')[0] | trim }}"
+    web_container_restart_policy: "{{ web_container_inspect.stdout.split('|')[1] | trim }}"
+    web_container_running: "{{ web_container_inspect.stdout.split('|')[2] | trim }}"
+  when: web_container_inspect.rc == 0
+  no_log: true
+
+- name: "Remove Web container when image, env, or restart policy drifted / Web container drift 제거"
+  command: docker rm -f "{{ web_container_name }}"
+  register: web_container_removed
+  when:
+    - web_container_inspect.rc == 0
+    - web_env_file.changed or web_container_image != web_image_ref or web_container_restart_policy != 'unless-stopped'
+
+- name: "Check Web host port before creating the container / Web host port 충돌 검사"
+  command: ss -ltnH 'sport = :3000'
+  register: web_port_check
+  changed_when: false
+  failed_when: false
+  when:
+    - web_container_inspect.rc != 0 or (web_container_removed is defined and web_container_removed.changed)
+
+- name: "Require the Web application port to be available / Web application port 사용 가능 요구"
+  assert:
+    that:
+      - web_port_check.stdout | trim == ''
+    fail_msg: "TCP port 3000 is already occupied by an unmanaged host process."
+  when:
+    - web_container_inspect.rc != 0 or (web_container_removed is defined and web_container_removed.changed)
+
+- name: "Run Web container with persistent restart policy / Web container 실행"
+  shell: >-
+    docker run --detach
+    --name "{{ web_container_name }}"
+    --restart unless-stopped
+    --publish IP_REDACTED:3000:3000
+    --env-file "{{ web_app_dir }}/hospital-dr-web.env"
+    "{{ web_image_ref }}"
+  when:
+    - web_container_inspect.rc != 0 or (web_container_removed is defined and web_container_removed.changed)
+
+- name: "Start an existing stopped Web container / 중지된 기존 Web container 시작"
+  command: docker start "{{ web_container_name }}"
+  when:
+    - web_container_inspect.rc == 0
+    - web_container_removed is not defined or not web_container_removed.changed
+    - (web_container_running | string | lower) != 'true'
+
+- name: "Wait for the Web container healthcheck / Web container healthcheck 대기"
+  shell: |
+    set -euo pipefail
+    for attempt in $(seq 1 30); do
+      health="$(docker inspect --format '{% raw %}{{.State.Health.Status}}{% endraw %}' "{{ web_container_name }}" 2>/dev/null || true)"
+      if [ "$health" = "healthy" ]; then
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "Web container did not become healthy."
+    docker inspect --format '{% raw %}{{.State.Health.Status}}{% endraw %}' "{{ web_container_name }}"
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "Create Web TLS directory / Web TLS 디렉토리 생성"
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: "Install external Web Origin CA certificate / 외부 Web Origin CA 인증서 설치"
+  copy:
+    src: "{{ web_tls_cert_source }}"
+    dest: /etc/nginx/ssl/hospital-web.crt
+    owner: root
+    group: root
+    mode: '0644'
+  when: web_tls_cert_source | length > 0
+  no_log: true
+  register: web_tls_cert_file
+
+- name: "Install external Web Origin CA private key / 외부 Web Origin CA private key 설치"
+  copy:
+    src: "{{ web_tls_key_source }}"
+    dest: /etc/nginx/ssl/hospital-web.key
+    owner: root
+    group: root
+    mode: '0600'
+  when: web_tls_key_source | length > 0
+  no_log: true
+  register: web_tls_key_file
+
+- name: "Generate non-production DR origin certificate only when absent / 비운영 DR origin 인증서가 없을 때만 생성"
+  shell: |
+    if [ ! -f /etc/nginx/ssl/hospital-web.crt ] || [ ! -f /etc/nginx/ssl/hospital-web.key ]; then
+      openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/hospital-web.key \
+        -out /etc/nginx/ssl/hospital-web.crt \
+        -subj "/CN={{ web_domain }}"
+      chmod 600 /etc/nginx/ssl/hospital-web.key
+      chmod 644 /etc/nginx/ssl/hospital-web.crt
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when:
+    - not (web_require_production_tls | bool)
+    - web_tls_cert_source | length == 0
+    - web_tls_key_source | length == 0
+
+- name: "Validate Web TLS pair and hostname / Web TLS 인증서 쌍 및 hostname 검증"
+  shell: |
+    set -euo pipefail
+    cert_public_key="$(openssl x509 -in /etc/nginx/ssl/hospital-web.crt -pubkey -noout | openssl pkey -pubin -pubout -outform DER | sha256sum | awk '{print $1}')"
+    key_public_key="$(openssl pkey -in /etc/nginx/ssl/hospital-web.key -pubout -outform DER | sha256sum | awk '{print $1}')"
+    test -n "$cert_public_key"
+    test "$cert_public_key" = "$key_public_key"
+    openssl x509 -in /etc/nginx/ssl/hospital-web.crt -noout -checkhost "{{ web_domain }}" >/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+  no_log: true
+
+# These files are initialized once. Normal role runs must not overwrite a
+# Dump-specific maintenance map that is active for the current cutover.
+- name: "Install default-disabled Dump maintenance map once / Dump 유지보수 map 기본 비활성 파일 최초 설치"
+  copy:
+    dest: /etc/nginx/conf.d/hospital-dr-dump-mode.conf
+    content: |
+      map $host $hospital_dr_dump_maintenance {
+          default 0;
+      }
+      map $hospital_dr_dump_maintenance $hospital_dr_dump_maintenance_cache_control {
+          default "";
+          1 "no-store, private";
+      }
+      map $http_x_hospital_dr_probe $hospital_dr_dump_probe_authorized {
+          default 0;
+      }
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  register: web_dump_mode_default
+
+- name: "Install Dump maintenance location snippet once / Dump 유지보수 location snippet 최초 설치"
+  copy:
+    dest: /etc/nginx/snippets/hospital-dr-dump-maintenance.inc
+    content: |
+      add_header Cache-Control $hospital_dr_dump_maintenance_cache_control always;
+      if ($hospital_dr_dump_maintenance = 1) { return 503 "Hospital DR maintenance"; }
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  register: web_dump_maintenance_snippet
+
+- name: "Configure EMR access probe variables / EMR 접근 probe 변수 구성"
+  copy:
+    dest: /etc/nginx/conf.d/hospital-emr-access.conf
+    content: |
+      map $http_cf_connecting_ip $hospital_emr_cf_allowed {
+          default 0;
+          {{ emr_cf_probe_ip }} 1;
+      {% for ip in emr_allowed_client_ips.split(',') %}
+      {% if ip | trim %}
+          {{ ip | trim }} 1;
+      {% endif %}
+      {% endfor %}
+      }
+
+      map $http_x_hospital_dr_check $hospital_emr_probe_allowed {
+          default 0;
+          "{{ emr_health_check_header }}" 1;
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  register: web_nginx_access_config
+
+- name: "Configure Nginx Web and EMR reverse proxy / Nginx Web 및 EMR reverse proxy 구성"
+  copy:
+    dest: /etc/nginx/sites-available/hospital-web
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name {{ web_domain }} _;
+          include /etc/nginx/snippets/hospital-dr-dump-maintenance.inc;
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl default_server;
+          listen [::]:443 ssl default_server;
+          server_name {{ web_domain }};
+          ssl_certificate /etc/nginx/ssl/hospital-web.crt;
+          ssl_certificate_key /etc/nginx/ssl/hospital-web.key;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_prefer_server_ciphers off;
+
+          set $hospital_emr_access_allowed 0;
+          if ($hospital_emr_cf_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+          if ($hospital_emr_probe_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+
+          location = /__hospital_dr/health {
+              if ($hospital_dr_dump_probe_authorized = 0) { return 404; }
+              limit_except GET { deny all; }
+              proxy_pass http://IP_REDACTED:3000/__hospital_dr/health;
+              proxy_set_header X-Hospital-DR-Probe "";
+              proxy_set_header Host $host;
+              proxy_hide_header Set-Cookie;
+              add_header Cache-Control "no-store, private" always;
+          }
+
+          location = /emr/__hospital_dr/health {
+              if ($hospital_dr_dump_probe_authorized = 0) { return 404; }
+              limit_except GET { deny all; }
+              proxy_pass http://{{ web_emr_host }}/__hospital_dr/health;
+              proxy_set_header X-Hospital-DR-Probe "";
+              proxy_set_header Host $host;
+              proxy_hide_header Set-Cookie;
+              add_header Cache-Control "no-store, private" always;
+          }
+
+          location / {
+              include /etc/nginx/snippets/hospital-dr-dump-maintenance.inc;
+              proxy_pass http://IP_REDACTED:3000;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+          }
+
+          location = /emr {
+              include /etc/nginx/snippets/hospital-dr-dump-maintenance.inc;
+              return 301 /emr/;
+          }
+
+          location /emr/ {
+              include /etc/nginx/snippets/hospital-dr-dump-maintenance.inc;
+              if ($hospital_emr_access_allowed = 0) {
+                  return 403;
+              }
+              rewrite ^/emr/(.*)$ /$1 break;
+              proxy_pass http://{{ web_emr_host }};
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Prefix /emr;
+          }
+      }
+
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name {{ emr_domain }};
+          include /etc/nginx/snippets/hospital-dr-dump-maintenance.inc;
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          server_name {{ emr_domain }};
+          ssl_certificate /etc/nginx/ssl/hospital-web.crt;
+          ssl_certificate_key /etc/nginx/ssl/hospital-web.key;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_prefer_server_ciphers off;
+
+          location = /__hospital_dr/health {
+              if ($hospital_dr_dump_probe_authorized = 0) { return 404; }
+              limit_except GET { deny all; }
+              proxy_pass http://{{ web_emr_host }}/__hospital_dr/health;
+              proxy_set_header X-Hospital-DR-Probe "";
+              proxy_set_header Host $host;
+              proxy_hide_header Set-Cookie;
+              add_header Cache-Control "no-store, private" always;
+          }
+
+          set $hospital_emr_access_allowed 0;
+          if ($hospital_emr_cf_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+          if ($hospital_emr_probe_allowed = 1) {
+              set $hospital_emr_access_allowed 1;
+          }
+
+          location / {
+              include /etc/nginx/snippets/hospital-dr-dump-maintenance.inc;
+              if ($hospital_emr_access_allowed = 0) {
+                  return 403;
+              }
+              proxy_pass http://{{ web_emr_host }};
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  register: web_nginx_site
+
+- name: "Enable the DR Web Nginx site / DR Web Nginx site 활성화"
+  file:
+    src: /etc/nginx/sites-available/hospital-web
+    dest: /etc/nginx/sites-enabled/hospital-web
+    state: link
+    force: yes
+  register: web_nginx_site_link
+
+- name: "Disable the default Nginx site / 기본 Nginx site 비활성화"
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  register: web_nginx_default_site
+
+- name: "Validate Nginx configuration / Nginx 설정 검증"
+  command: nginx -t
+  changed_when: false
+
+- name: "Enable and start Nginx / Nginx 서비스 활성화 및 시작"
+  service:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: "Reload Nginx after an actual configuration or certificate change / 설정 또는 인증서 변경 시 Nginx reload"
+  service:
+    name: nginx
+    state: reloaded
+  when:
+    - (web_tls_cert_file.changed | default(false)) or (web_tls_key_file.changed | default(false)) or (web_nginx_access_config.changed | default(false)) or (web_nginx_site.changed | default(false)) or (web_nginx_site_link.changed | default(false)) or (web_nginx_default_site.changed | default(false)) or (web_dump_mode_default.changed | default(false)) or (web_dump_maintenance_snippet.changed | default(false))

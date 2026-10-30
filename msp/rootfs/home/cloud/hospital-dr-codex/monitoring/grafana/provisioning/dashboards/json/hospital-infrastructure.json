@@ -1,0 +1,129 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "id": null,
+  "panels": [
+    {
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "description": "Zabbix server's real internal view of its own agent availability. On-Prem host and shared-path states are classified separately.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Zabbix servers"}, "host": {"filter": "Zabbix server"}, "item": {"filter": "Linux: Zabbix agent availability"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "A", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}}],
+      "title": "Zabbix Server Availability",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "description": "Zabbix server agent ping. This is a real MSP runtime signal and avoids presenting unavailable On-Prem history as live data.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Zabbix servers"}, "host": {"filter": "Zabbix server"}, "item": {"filter": "Linux: Zabbix agent ping"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "A", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}}],
+      "title": "Zabbix Server Agent Ping",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "description": "Current operator state: Web is live and reachable; Doc/EMR and DB are intentionally powered off/not tested live. An unavailable peer is never treated as proof of a global WireGuard failure.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "Disconnected"}, "1": {"color": "green", "text": "Connected"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"content": "## On-Prem Monitoring State\n\n**GLOBAL PATH: PASS_PARTIAL_LIVE**\n\n- Web runtime: **LIVE / WG PATH PASS**\n- Web application dependency: **DEGRADED / NOT CONFIRMED**\n- Doc/EMR: **POWERED OFF / NOT TESTED LIVE**\n- DB: **POWERED OFF / NOT TESTED LIVE**\n\nDoc/DB being unavailable is not classified as a shared-path failure. Web runtime reachability, application health, and dependency health are separate signals.", "mode": "markdown"},
+      "targets": [],
+      "title": "On-Prem Agent Path",
+      "type": "text"
+    },
+    {
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "description": "Actual Zabbix availability for the reachable On-Prem Web host. A 1 confirms the Web agent path; application dependency health is a separate signal.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "orange", "text": "Agent unavailable / check host state"}, "1": {"color": "green", "text": "LIVE / WG PATH PASS"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "orange", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
+      "id": 9,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Linux servers"}, "host": {"filter": "web_server"}, "item": {"filter": "Linux: Zabbix agent availability"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "A", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}}],
+      "title": "On-Prem Web Agent / Runtime",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "description": "SNMP/ICMP reachability for the monitored Router and Catalyst devices. This is monitoring evidence only and never sets DR_Escalate.",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Cisco-2800-Series"}, "item": {"filter": "Cisco IOS: ICMP ping"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "A", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}},
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Catalyst-2950-Series"}, "item": {"filter": "Cisco IOS: ICMP ping"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "B", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}},
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Catalyst-3560-Series"}, "item": {"filter": "Cisco IOS: ICMP ping"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "C", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}},
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Catalyst-3550-Series"}, "item": {"filter": "Cisco IOS: ICMP ping"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "D", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}}
+      ],
+      "title": "Router / Catalyst Reachability",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
+      "description": "Live SNMP availability reported by Zabbix for the Router and three Catalyst devices. This is monitoring evidence only and never sets DR_Escalate.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "SNMP Down"}, "1": {"color": "green", "text": "SNMP Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "id": 8,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Cisco-2800-Series"}, "item": {"filter": "Cisco IOS: SNMP agent availability"}, "itemTag": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "A", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}},
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Catalyst-2950-Series"}, "item": {"filter": "Cisco IOS: SNMP agent availability"}, "itemTag": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "B", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}},
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Catalyst-3560-Series"}, "item": {"filter": "Cisco IOS: SNMP agent availability"}, "itemTag": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "C", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}},
+        {"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Templates/Network devices"}, "host": {"filter": "Catalyst-3550-Series"}, "item": {"filter": "Cisco IOS: SNMP agent availability"}, "itemTag": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "D", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}}
+      ],
+      "title": "Router / Catalyst SNMP Availability",
+      "type": "stat"
+    },
+    {
+      "description": "No current On-Prem CPU value is presented for Doc/DB while those hosts are powered off/not tested live. This is not a global WireGuard failure.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 24},
+      "id": 5,
+      "options": {"content": "## ON-PREM CPU\n\n**DOC/DB: POWERED OFF / NOT TESTED LIVE**\n\nWeb agent path is live. No CPU value is synthesized for powered-off Doc/DB hosts.", "mode": "markdown"},
+      "title": "On-Prem CPU",
+      "type": "text"
+    },
+    {
+      "description": "No current On-Prem memory value is presented for Doc/DB while those hosts are powered off/not tested live. This is not a global WireGuard failure.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 24},
+      "id": 6,
+      "options": {"content": "## ON-PREM MEMORY\n\n**DOC/DB: POWERED OFF / NOT TESTED LIVE**\n\nNo memory value is synthesized for hosts that are not currently running.", "mode": "markdown"},
+      "title": "On-Prem Memory Available",
+      "type": "text"
+    },
+    {
+      "description": "No current On-Prem disk value is presented for Doc/DB while those hosts are powered off/not tested live. This is not a global WireGuard failure.",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 24},
+      "id": 7,
+      "options": {"content": "## ON-PREM DISK\n\n**DOC/DB: POWERED OFF / NOT TESTED LIVE**\n\nNo disk value is synthesized for hosts that are not currently running.", "mode": "markdown"},
+      "title": "On-Prem Disk Used",
+      "type": "text"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["DR", "Infrastructure", "Zabbix", "SNMP"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "Hospital DR Infrastructure",
+  "uid": "hospital-dr-infrastructure",
+  "version": 1
+}

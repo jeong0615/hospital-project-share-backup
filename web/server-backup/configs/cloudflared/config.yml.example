@@ -1,0 +1,11 @@
+tunnel: hospital-tunnel
+credentials-file: <CREDENTIAL_FILE>
+
+ingress:
+  - hostname: hospital-web.pp.ua
+    service: http://localhost:80
+
+  - hostname: ssh.hospital-web.pp.ua
+    service: ssh://localhost:22
+
+  - service: http_status:404

@@ -1,0 +1,16 @@
+[Unit]
+Description=Hospital DB encrypted backup to MSP
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=hoseo
+Group=hoseo
+WorkingDirectory=/home/hoseo
+Environment=HOME=/home/hoseo
+ExecStart=/home/hoseo/scripts/db_backup.sh
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

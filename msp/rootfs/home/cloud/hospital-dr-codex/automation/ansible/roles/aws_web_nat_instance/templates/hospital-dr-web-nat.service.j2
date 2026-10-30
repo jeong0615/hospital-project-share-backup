@@ -1,0 +1,15 @@
+[Unit]
+Description=Hospital DR Web NAT Instance rules
+Wants=network-online.target
+After=network-online.target docker.service
+Before=wg-quick@{{ aws_web_nat_instance_interface }}.service
+ConditionPathExists={{ aws_web_nat_instance_script }}
+
+[Service]
+Type=oneshot
+ExecStart={{ aws_web_nat_instance_script }} apply
+ExecStop={{ aws_web_nat_instance_script }} remove
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

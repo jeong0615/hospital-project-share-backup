@@ -1,0 +1,126 @@
+#!/bin/bash
+set -Eeuo pipefail
+set +x
+umask 077
+
+REGION='${region}'
+DOMAIN='${domain}'
+CERT_PARAMETER='${cert_parameter}'
+KEY_PARAMETER='${key_parameter}'
+SOURCE_PARAMETER='${source_parameter}'
+ROOT='/opt/hospital-dr-synthetic-probe'
+ETC='/etc/hospital-dr-synthetic-probe'
+
+install -d -o root -g root -m 0750 "$ROOT" "$ETC"
+cat > "$ROOT/probe_server.py" <<'PYCODE'
+${probe_source}
+PYCODE
+chmod 0644 "$ROOT/probe_server.py"
+get_parameter() {
+  local name="$1" decrypt="$2" destination="$3"
+  local temporary="$${destination}.new"
+  rm -f "$temporary"
+  if [[ "$decrypt" == yes ]]; then
+    aws ssm get-parameter --region "$REGION" --name "$name" --with-decryption --query 'Parameter.Value' --output text > "$temporary" 2>/dev/null || { rm -f "$temporary"; return 1; }
+  else
+    aws ssm get-parameter --region "$REGION" --name "$name" --query 'Parameter.Value' --output text > "$temporary" 2>/dev/null || { rm -f "$temporary"; return 1; }
+  fi
+  chmod 0600 "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+if ! command -v aws >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
+  logger -t synthetic-probe 'BOOTSTRAP_BLOCKED_REQUIRED_TOOL_MISSING'
+  exit 1
+fi
+
+get_parameter "$CERT_PARAMETER" yes "$ETC/fullchain.pem" || { logger -t synthetic-probe 'BOOTSTRAP_BLOCKED_CERTIFICATE_FETCH'; exit 1; }
+get_parameter "$KEY_PARAMETER" yes "$ETC/privkey.pem" || { rm -f "$ETC/fullchain.pem"; logger -t synthetic-probe 'BOOTSTRAP_BLOCKED_PRIVATE_KEY_FETCH'; exit 1; }
+get_parameter "$SOURCE_PARAMETER" no "$ETC/allowed-source.txt" || { rm -f "$ETC/fullchain.pem" "$ETC/privkey.pem"; logger -t synthetic-probe 'BOOTSTRAP_BLOCKED_SOURCE_CONFIG_FETCH'; exit 1; }
+
+chown root:root "$ETC/fullchain.pem" "$ETC/privkey.pem" "$ETC/allowed-source.txt"
+chmod 0600 "$ETC/fullchain.pem" "$ETC/privkey.pem" "$ETC/allowed-source.txt"
+if ! openssl x509 -in "$ETC/fullchain.pem" -noout -checkhost "$DOMAIN" >/dev/null 2>&1 || \
+   ! openssl x509 -in "$ETC/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1 || \
+   [[ "$(openssl x509 -in "$ETC/fullchain.pem" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" != \
+      "$(openssl pkey -passin pass: -in "$ETC/privkey.pem" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" ]]; then
+  rm -f "$ETC/fullchain.pem" "$ETC/privkey.pem"
+  logger -t synthetic-probe 'BOOTSTRAP_BLOCKED_TLS_CERTIFICATE_CHECK'
+  exit 1
+fi
+
+if ! id probe >/dev/null 2>&1; then useradd --system --home-dir /nonexistent --shell /sbin/nologin probe; fi
+chown root:probe "$ROOT" "$ETC"
+chmod 0750 "$ROOT" "$ETC"
+chown root:probe "$ETC/fullchain.pem" "$ETC/privkey.pem"
+chmod 0640 "$ETC/fullchain.pem" "$ETC/privkey.pem"
+chown probe:probe "$ETC/allowed-source.txt"
+chmod 0400 "$ETC/allowed-source.txt"
+
+cat > /etc/systemd/system/hospital-dr-synthetic-probe.service <<UNIT
+[Unit]
+Description=Synthetic HTTPS client-IP echo probe
+After=network-online.target amazon-ssm-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=probe
+Group=probe
+ExecStart=/usr/bin/python3 $ROOT/probe_server.py --serve --domain $DOMAIN --allowed-source-file $ETC/allowed-source.txt --certificate $ETC/fullchain.pem --private-key $ETC/privkey.pem
+Restart=no
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+chmod 0644 /etc/systemd/system/hospital-dr-synthetic-probe.service
+systemctl daemon-reload
+cat > /usr/local/sbin/hospital-dr-synthetic-probe-refresh <<'REFRESH'
+#!/bin/bash
+set -Eeuo pipefail
+set +x
+umask 077
+tmp='/etc/hospital-dr-synthetic-probe/allowed-source.txt.new'
+aws ssm get-parameter --region '${region}' --name '${source_parameter}' --query 'Parameter.Value' --output text > "$tmp" 2>/dev/null || { rm -f "$tmp"; exit 1; }
+chmod 0400 "$tmp"
+if ! /usr/bin/python3 - "$tmp" <<'PY'
+import ipaddress, pathlib, sys
+try:
+    value = pathlib.Path(sys.argv[1]).read_text(encoding="ascii").strip()
+    address = ipaddress.ip_address(value)
+    valid = value != "DISABLED" and address.version == 4 and address.is_global
+except (OSError, ValueError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+then
+  rm -f "$tmp"
+  exit 1
+fi
+chown probe:probe "$tmp"
+mv -f "$tmp" '/etc/hospital-dr-synthetic-probe/allowed-source.txt'
+systemctl enable hospital-dr-synthetic-probe.service >/dev/null 2>&1
+systemctl restart hospital-dr-synthetic-probe.service >/dev/null 2>&1
+REFRESH
+chmod 0750 /usr/local/sbin/hospital-dr-synthetic-probe-refresh
+if [[ "$(tr -d '\r\n' < "$ETC/allowed-source.txt")" != 'DISABLED' ]]; then
+  if ! /usr/local/sbin/hospital-dr-synthetic-probe-refresh >/dev/null 2>&1; then
+    logger -t synthetic-probe 'BOOTSTRAP_BLOCKED_SERVICE_START'
+    exit 1
+  fi
+else
+  logger -t synthetic-probe 'BOOTSTRAP_WAITING_FOR_SOURCE_ALLOWLIST'
+fi
+logger -t synthetic-probe 'BOOTSTRAP_COMPLETE'

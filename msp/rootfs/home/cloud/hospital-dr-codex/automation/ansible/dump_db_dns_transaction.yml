@@ -1,0 +1,255 @@
+---
+- name: Validate the exact Dump DNS transaction inventory and request
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Reject ambiguous, production, or unauthorized DNS transaction targets
+      ansible.builtin.assert:
+        that:
+          - groups['web_servers'] | default([]) == ['dr-web']
+          - groups['doc_servers'] | default([]) == ['dr-doc']
+          - groups['isolated_dump_restore'] | default([]) == ['isolated-dump-restore']
+          - dump_dns_transaction_phase in ['verify-dns-transaction', 'verify-dml-fence']
+          - dump_dns_transaction_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_dns_transaction_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_dns_transaction_private_ip is match('^10[.]20[.]30[.](?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+          - dump_dns_transaction_private_ip not in ['IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED']
+          - dump_dns_transaction_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_dns_transaction_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_dns_transaction_data_volume_id != dump_dns_transaction_stage_volume_id
+          - dump_dns_transaction_service_sg_id is match('^sg-[0-9a-f]{8,32}$')
+          - dump_dns_transaction_expected_sha256 is match('^[0-9a-f]{64}$')
+          - dump_dns_transaction_backup_id is match('^db_backup_[0-9]{8}_[0-9]{4,6}[.]sql[.]gz[.]enc$')
+          - dump_dns_transaction_promotion_id is match('^[0-9a-f-]{36}$')
+          - dump_dns_transaction_cutover_id is match('^[0-9a-f-]{36}$')
+        fail_msg: Dump DNS transaction identity or phase is invalid.
+
+- name: Revalidate the isolated DB receipts and live no-DML contract
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_dns_transaction_db_cli: /usr/local/lib/hospital-dr-dump-readonly-health/dump_db_readonly_health_host.py
+    dump_dns_transaction_db_helper: /usr/local/lib/hospital-dr-dump-readonly-health/isolated_db_service_host.py
+    dump_dns_transaction_restore_helper: /usr/local/lib/hospital-dr-dump-readonly-health/isolated_restore_host.py
+  tasks:
+    - name: Inspect installed verifier files without changing the isolated host
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop:
+        - { path: "{{ dump_dns_transaction_db_cli }}", expected: "{{ dump_dns_transaction_db_cli_sha256 }}" }
+        - { path: "{{ dump_dns_transaction_db_helper }}", expected: "{{ dump_dns_transaction_db_helper_sha256 }}" }
+        - { path: "{{ dump_dns_transaction_restore_helper }}", expected: "{{ dump_dns_transaction_restore_helper_sha256 }}" }
+      register: dump_dns_transaction_db_helper_stats
+      changed_when: false
+
+    - name: Require exact reviewed root-owned DB verifier files
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.checksum == item.item.expected
+        fail_msg: Installed Dump DB verifier differs from the reviewed source.
+      loop: "{{ dump_dns_transaction_db_helper_stats.results }}"
+      no_log: true
+
+    - name: Recheck restore, EBS, MySQL accounts, SELECT-only grants, sessions, and background writers
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_dns_transaction_db_cli }}"
+          - verify-public-readiness
+          - --instance-id
+          - "{{ dump_dns_transaction_instance_id }}"
+          - --private-ip
+          - "{{ dump_dns_transaction_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_dns_transaction_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_dns_transaction_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_dns_transaction_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_dns_transaction_backup_id }}"
+          - --promotion-id
+          - "{{ dump_dns_transaction_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_dns_transaction_cutover_id }}"
+      register: dump_dns_transaction_db_result
+      changed_when: false
+      no_log: true
+
+    - name: Require the same isolated DB, SELECT-only app accounts, and DML denial
+      ansible.builtin.assert:
+        that:
+          - dump_dns_transaction_db_result.rc == 0
+          - (dump_dns_transaction_db_result.stdout | from_json).status == 'APPS_READONLY_HEALTH_REVALIDATED_NOT_DNS_AUTHORIZED'
+          - (dump_dns_transaction_db_result.stdout | from_json).instance_id == dump_dns_transaction_instance_id
+          - (dump_dns_transaction_db_result.stdout | from_json).private_ip == dump_dns_transaction_private_ip
+          - (dump_dns_transaction_db_result.stdout | from_json).data_volume_id == dump_dns_transaction_data_volume_id
+          - (dump_dns_transaction_db_result.stdout | from_json).stage_volume_id == dump_dns_transaction_stage_volume_id
+          - (dump_dns_transaction_db_result.stdout | from_json).backup_id == dump_dns_transaction_backup_id
+          - (dump_dns_transaction_db_result.stdout | from_json).sha256 == dump_dns_transaction_expected_sha256
+          - (dump_dns_transaction_db_result.stdout | from_json).app_accounts == 'SELECT_ONLY'
+          - (dump_dns_transaction_db_result.stdout | from_json).application_writes_allowed == false
+          - (dump_dns_transaction_db_result.stdout | from_json).dns_authorized == false
+        fail_msg: The isolated DB no-DML contract or operation identity is no longer valid.
+      no_log: true
+
+    - name: Verify binary logging is enabled before establishing the no-write baseline
+      ansible.builtin.command:
+        argv: [mysql, --protocol=socket, -uroot, --batch, --skip-column-names, --execute, "SELECT @@global.log_bin"]
+      register: dump_dns_transaction_log_bin
+      changed_when: false
+      no_log: true
+
+    - name: Read current binlog file and position without changing MySQL
+      ansible.builtin.command:
+        argv: [mysql, --protocol=socket, -uroot, --batch, --skip-column-names, --execute, "SHOW MASTER STATUS"]
+      register: dump_dns_transaction_master_status
+      changed_when: false
+      no_log: true
+
+    - name: Require a parseable binlog position and compare the rollback safety baseline
+      ansible.builtin.assert:
+        that:
+          - dump_dns_transaction_log_bin.stdout | trim == '1'
+          - dump_dns_transaction_master_status.stdout_lines | length == 1
+          - (dump_dns_transaction_master_status.stdout.split() | length) >= 2
+          - dump_dns_transaction_master_status.stdout.split()[0] is match('^[A-Za-z0-9._-]{1,128}$')
+          - dump_dns_transaction_master_status.stdout.split()[1] is match('^[1-9][0-9]{0,19}$')
+          - dump_dns_transaction_phase != 'verify-dml-fence' or dump_dns_transaction_master_status.stdout.split()[0] == dump_dns_transaction_expected_binlog_file
+          - dump_dns_transaction_phase != 'verify-dml-fence' or (dump_dns_transaction_master_status.stdout.split()[1] | int) == (dump_dns_transaction_expected_binlog_position | int)
+        fail_msg: The isolated DB binlog changed or cannot prove that no writes occurred.
+      no_log: true
+
+    - name: Retain only the binlog coordinates required for write-safety comparison
+      ansible.builtin.set_fact:
+        dump_dns_transaction_binlog_file: "{{ dump_dns_transaction_master_status.stdout.split()[0] }}"
+        dump_dns_transaction_binlog_position: "{{ dump_dns_transaction_master_status.stdout.split()[1] }}"
+      no_log: true
+
+    - name: Publish only the verified non-secret DB identity for the app checks
+      ansible.builtin.set_fact:
+        dump_dns_transaction_db_identity: "{{ dump_dns_transaction_db_result.stdout | from_json }}"
+      no_log: true
+
+- name: Revalidate active app identity and write fence
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    dump_dns_transaction_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+  tasks:
+    - name: Inspect the exact running app container and read-only cutover receipt
+      ansible.builtin.script:
+        cmd: >-
+          {{ playbook_dir }}/../../operations/db/dump_db_app_fence_probe.py
+          --kind {{ dump_dns_transaction_kind }}
+          --cutover-id {{ dump_dns_transaction_cutover_id }}
+          --isolated-private-ip {{ dump_dns_transaction_private_ip }}
+          --mode readonly-active
+          --db-server-uuid {{ hostvars['isolated-dump-restore'].dump_dns_transaction_db_identity.db_server_uuid }}
+        executable: python3
+      register: dump_dns_transaction_app_result
+      changed_when: false
+      no_log: true
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+    - name: Require loopback-only healthy app containers on the isolated DB
+      ansible.builtin.assert:
+        that:
+          - dump_dns_transaction_app_result.rc == 0
+          - (dump_dns_transaction_app_result.stdout | from_json).status == 'PASS'
+          - (dump_dns_transaction_app_result.stdout | from_json).cutover_id == dump_dns_transaction_cutover_id
+          - (dump_dns_transaction_app_result.stdout | from_json).db_host == dump_dns_transaction_private_ip
+          - (dump_dns_transaction_app_result.stdout | from_json).db_port | int == 3307
+          - (dump_dns_transaction_app_result.stdout | from_json).db_server_uuid == hostvars['isolated-dump-restore'].dump_dns_transaction_db_identity.db_server_uuid
+          - (dump_dns_transaction_app_result.stdout | from_json).external_fence | bool
+          - (dump_dns_transaction_app_result.stdout | from_json).container_running | bool
+          - (dump_dns_transaction_app_result.stdout | from_json).select_only_probe | bool
+        fail_msg: The current Web/EMR app no longer matches the fenced read-only DB cutover.
+      no_log: true
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+- name: Verify maintenance, bounded timers, and exact prepared nftables rules
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    dump_dns_transaction_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+    dump_dns_transaction_expiry_unit: "hospital-dr-dump-expire-{{ dump_dns_transaction_cutover_id | replace('-', '') }}"
+  tasks:
+    - name: Verify the exact prepared non-loopback ingress chain
+      ansible.builtin.command:
+        argv: "{{ ['/usr/local/sbin/hospital-dr-dump-external-fence', 'verify-prepared', '--role', dump_dns_transaction_kind, '--cutover-id', dump_dns_transaction_cutover_id] + (dump_dns_transaction_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}"
+      register: dump_dns_transaction_fence_result
+      changed_when: false
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+    - name: Require the operation-specific self-expiring ingress timer
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ dump_dns_transaction_expiry_unit }}.timer"]
+      register: dump_dns_transaction_timer_result
+      changed_when: false
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+    - name: Require active exact fence and timer before DNS mutation
+      ansible.builtin.assert:
+        that:
+          - dump_dns_transaction_fence_result.rc == 0
+          - "'DUMP_PUBLIC_READINESS_FENCE=PASS' in dump_dns_transaction_fence_result.stdout"
+          - dump_dns_transaction_timer_result.stdout | trim == 'active'
+        fail_msg: The prepared network fence or its automatic expiry timer is not active.
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+- name: Verify maintenance and authenticated origin probes before DNS mutation
+  hosts: web_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Confirm user routes still return maintenance, not application content
+      ansible.builtin.uri:
+        url: "http://IP_REDACTED{{ item.path }}"
+        method: GET
+        headers:
+          Host: "{{ item.host }}"
+        status_code: 503
+        timeout: 10
+        return_content: false
+      loop:
+        - { host: "{{ dump_dns_transaction_web_domain }}", path: "/" }
+        - { host: "{{ dump_dns_transaction_web_domain }}", path: "/emr/" }
+        - { host: "{{ dump_dns_transaction_emr_domain }}", path: "/" }
+      register: dump_dns_transaction_maintenance_result
+      changed_when: false
+      no_log: true
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+    - name: Require maintenance on every user route before DNS mutation
+      ansible.builtin.assert:
+        that:
+          - dump_dns_transaction_maintenance_result.results | length == 3
+          - dump_dns_transaction_maintenance_result.results | selectattr('status', 'equalto', 503) | list | length == 3
+        fail_msg: Maintenance or authenticated health response contract failed.
+      no_log: true
+      when: dump_dns_transaction_phase == 'verify-dns-transaction'
+
+- name: Emit only a non-secret DNS transaction gate result
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirm the full pre-DNS gate
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('DUMP_DNS_TRANSACTION_REMOTE=PASS' if dump_dns_transaction_phase == 'verify-dns-transaction' else 'DUMP_DNS_TRANSACTION_DML_FENCE=PASS')
+             ~ ' binlog_file=' ~ hostvars['isolated-dump-restore'].dump_dns_transaction_binlog_file
+             ~ ' binlog_position=' ~ hostvars['isolated-dump-restore'].dump_dns_transaction_binlog_position }}

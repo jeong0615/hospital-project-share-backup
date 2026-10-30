@@ -1,0 +1,20 @@
+[Unit]
+Description=Hospital DR environment lifecycle tied to the local controller
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=cloud
+WorkingDirectory=/opt/hospital-dr/infra/terraform
+RemainAfterExit=yes
+ExecStart=/opt/hospital-dr/infra/terraform/dr_environment_control.sh start
+ExecStop=/opt/hospital-dr/infra/terraform/dr_environment_control.sh stop
+TimeoutStartSec=20min
+TimeoutStopSec=20min
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

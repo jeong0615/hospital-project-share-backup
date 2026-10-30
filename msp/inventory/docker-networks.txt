@@ -1,0 +1,2 @@
+# docker network ls
+# command unavailable or failed on this host

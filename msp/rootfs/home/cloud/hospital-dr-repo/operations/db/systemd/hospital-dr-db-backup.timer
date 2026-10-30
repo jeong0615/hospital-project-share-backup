@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Hospital DR encrypted MySQL dump every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+AccuracySec=1min
+Unit=hospital-dr-db-backup.service
+
+[Install]
+WantedBy=timers.target

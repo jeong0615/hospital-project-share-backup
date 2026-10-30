@@ -1,0 +1,11 @@
+[Unit]
+Description=Upload complete Hospital DR backup pairs to S3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cloud
+Group=cloud
+Environment=DR_SECRET_FILE=/home/cloud/hospital-dr-secrets/dr.env
+ExecStart=/home/cloud/scripts/s3_backup_upload.sh

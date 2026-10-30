@@ -1,0 +1,11 @@
+---
+# Explicit, opt-in Web NAT Instance playbook. It is intentionally separate
+# from site.yml and from the AWS DR WireGuard playbook.
+- name: Configure the existing AWS Web as an optional NAT Instance
+  # Match the Web group produced by dr_ssm_write_ansible_inventory().
+  hosts: web_servers
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  roles:
+    - aws_web_nat_instance

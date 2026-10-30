@@ -1,0 +1,172 @@
+---
+- name: Keep the optional Web NAT Instance path disabled by default
+  ansible.builtin.debug:
+    msg: "AWS_WEB_NAT_INSTANCE_ENABLED is false; no Web firewall, sysctl, service, or route is changed."
+  when: not (aws_web_nat_instance_enabled | bool)
+
+- name: Validate the Web NAT Instance contract before any live change
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_action in ['apply', 'remove']
+      - aws_web_nat_instance_expected_instance_id == 'AWS_RESOURCE_ID_REDACTED'
+      - aws_web_nat_instance_expected_private_ip == 'AWS_PUBLIC_IP_REDACTED'
+      - aws_web_nat_instance_expected_vpc_id == 'AWS_RESOURCE_ID_REDACTED'
+      - aws_web_nat_instance_expected_subnet_id == 'AWS_RESOURCE_ID_REDACTED'
+      - aws_web_nat_instance_expected_eni == 'AWS_RESOURCE_ID_REDACTED'
+      - aws_web_nat_instance_uplink_interface not in ['wg0', aws_web_nat_instance_interface]
+      - aws_web_nat_instance_interface == 'wg-aws-dr'
+      - aws_web_nat_instance_private_cidrs == ['AWS_PUBLIC_IP_REDACTED/24', 'AWS_PUBLIC_IP_REDACTED/24', 'AWS_PUBLIC_IP_REDACTED/24']
+      - aws_web_nat_instance_excluded_destinations == ['AWS_PUBLIC_IP_REDACTED/16', 'AWS_PUBLIC_IP_REDACTED/24', 'AWS_PUBLIC_IP_REDACTED/24']
+      - "'10.250.' not in (aws_web_nat_instance_excluded_destinations | join(','))"
+      - "'192.168.200.' in (aws_web_nat_instance_excluded_destinations | join(','))"
+    fail_msg: "Web NAT Instance contract mismatch; refusing live configuration."
+  when: aws_web_nat_instance_enabled | bool
+
+- name: Obtain a short-lived IMDSv2 token for the Web host identity check
+  ansible.builtin.uri:
+    url: http://IP_REDACTED/latest/api/token
+    method: PUT
+    headers:
+      X-aws-ec2-metadata-token-ttl-seconds: "60"
+    return_content: true
+    status_code: 200
+    use_proxy: false
+  register: aws_web_nat_instance_imds_token
+  changed_when: false
+  no_log: true
+  when: aws_web_nat_instance_enabled | bool
+
+- name: Read the Web host identity from IMDSv2
+  ansible.builtin.uri:
+    url: "http://IP_REDACTED/latest/meta-data/{{ item.path }}"
+    method: GET
+    headers:
+      X-aws-ec2-metadata-token: "<SET_IN_SECRET_STORE>"
+    return_content: true
+    status_code: 200
+    use_proxy: false
+  loop:
+    - { path: "instance-id", fact: "instance_id" }
+    - { path: "local-ipv4", fact: "private_ip" }
+    - { path: "network/interfaces/macs/{{ ansible_default_ipv4.macaddress }}/vpc-id", fact: "vpc_id" }
+    - { path: "network/interfaces/macs/{{ ansible_default_ipv4.macaddress }}/subnet-id", fact: "subnet_id" }
+    - { path: "network/interfaces/macs/{{ ansible_default_ipv4.macaddress }}/interface-id", fact: "eni" }
+  register: aws_web_nat_instance_imds_identity
+  changed_when: false
+  no_log: true
+  when: aws_web_nat_instance_enabled | bool
+
+- name: Refuse NAT configuration unless the connected SSM host is the approved Web EC2
+  ansible.builtin.assert:
+    that:
+      - (aws_web_nat_instance_imds_identity.results | selectattr('item.fact', 'equalto', 'instance_id') | map(attribute='content') | first | trim) == aws_web_nat_instance_expected_instance_id
+      - (aws_web_nat_instance_imds_identity.results | selectattr('item.fact', 'equalto', 'private_ip') | map(attribute='content') | first | trim) == aws_web_nat_instance_expected_private_ip
+      - (aws_web_nat_instance_imds_identity.results | selectattr('item.fact', 'equalto', 'vpc_id') | map(attribute='content') | first | trim) == aws_web_nat_instance_expected_vpc_id
+      - (aws_web_nat_instance_imds_identity.results | selectattr('item.fact', 'equalto', 'subnet_id') | map(attribute='content') | first | trim) == aws_web_nat_instance_expected_subnet_id
+      - (aws_web_nat_instance_imds_identity.results | selectattr('item.fact', 'equalto', 'eni') | map(attribute='content') | first | trim) == aws_web_nat_instance_expected_eni
+      - ansible_default_ipv4.address == aws_web_nat_instance_expected_private_ip
+    fail_msg: "Connected SSM host identity does not match the approved Web instance, ENI, subnet, and VPC."
+  when: aws_web_nat_instance_enabled | bool
+
+- name: Verify this is the approved Web host before any live change
+  ansible.builtin.assert:
+    that:
+      - ansible_default_ipv4.address == aws_web_nat_instance_expected_private_ip
+    fail_msg: "The NAT Instance role may run only on the approved Web private IP."
+  when: aws_web_nat_instance_enabled | bool
+
+- name: Verify iptables is available without changing firewall state
+  ansible.builtin.command: iptables --version
+  register: aws_web_nat_instance_iptables_version
+  changed_when: false
+  when: aws_web_nat_instance_enabled | bool
+
+- name: Capture or validate the pre-NAT guest baseline
+  ansible.builtin.include_tasks: baseline.yml
+  when:
+    - aws_web_nat_instance_enabled | bool
+    - not ansible_check_mode
+
+- name: Configure the Web NAT Instance
+  block:
+    - name: Install the dedicated, non-flushing firewall controller
+      ansible.builtin.template:
+        src: hospital-dr-web-nat-instance.sh.j2
+        dest: "{{ aws_web_nat_instance_script }}"
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Snapshot or verify the exact pre-existing Web NAT chains
+      ansible.builtin.command: "{{ aws_web_nat_instance_script }} snapshot-firewall"
+      register: aws_web_nat_instance_firewall_snapshot
+      changed_when: "'NAT_FIREWALL_BASELINE=' in aws_web_nat_instance_firewall_snapshot.stdout"
+      when: not ansible_check_mode
+
+    - name: Persist IPv4 forwarding for the Web gateway and existing WireGuard gateway
+      ansible.builtin.copy:
+        dest: "{{ aws_web_nat_instance_sysctl_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Hospital DR Web gateway: shared by the optional NAT Instance and wg-aws-dr.
+          net.ipv4.ip_forward = 1
+      when: not ansible_check_mode
+
+    - name: Enable IPv4 forwarding for this running Canary window
+      ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+      register: aws_web_nat_instance_sysctl_apply
+      changed_when: "'net.ipv4.ip_forward = 1' in aws_web_nat_instance_sysctl_apply.stdout"
+      when: not ansible_check_mode
+
+    - name: Install the manual/boot-persistent NAT Instance oneshot
+      ansible.builtin.template:
+        src: hospital-dr-web-nat.service.j2
+        dest: "/etc/systemd/system/{{ aws_web_nat_instance_service }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: not ansible_check_mode
+
+    - name: Record exact applied-file hashes before changing firewall state
+      ansible.builtin.include_tasks: record-applied.yml
+      when: not ansible_check_mode
+
+    - name: Apply only the project-owned NAT chains
+      ansible.builtin.command: "{{ aws_web_nat_instance_script }} apply"
+      register: aws_web_nat_instance_apply
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Enable the NAT Instance service without touching WireGuard services
+      ansible.builtin.systemd:
+        name: "{{ aws_web_nat_instance_service }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: not ansible_check_mode
+
+    - name: Verify persistent forwarding and exact owned rules after apply
+      ansible.builtin.command: "{{ aws_web_nat_instance_script }} verify"
+      register: aws_web_nat_instance_verify
+      changed_when: false
+      when: not ansible_check_mode
+
+  rescue:
+    - name: Restore the captured guest baseline after a failed apply
+      ansible.builtin.include_tasks: restore.yml
+      when: not ansible_check_mode
+
+    - name: Stop after the NAT apply failure and rollback attempt
+      ansible.builtin.fail:
+        msg: "Web NAT apply failed; automatic baseline restoration was attempted. Inspect the rollback result before any retry."
+  when:
+    - aws_web_nat_instance_enabled | bool
+    - aws_web_nat_instance_action == 'apply'
+
+- name: Restore the exact pre-NAT guest baseline
+  ansible.builtin.include_tasks: restore.yml
+  when:
+    - aws_web_nat_instance_enabled | bool
+    - aws_web_nat_instance_action == 'remove'

@@ -1,0 +1,8 @@
+Latest complete encrypted backup observed on 2026-10-29:
+/home/hoseo/db_backups/db_backup_20261029_100000.sql.gz.enc
+/home/hoseo/db_backups/db_backup_20261029_100000.master_status
+
+The pair was copied directly from the DB server into this Repository.
+Incomplete .part files, raw nr-fresh/failback dumps, and older backup generations were not copied.
+The latest complete pair is the only new backup generation added in this update.
+The encryption key/password is stored outside this Repository.

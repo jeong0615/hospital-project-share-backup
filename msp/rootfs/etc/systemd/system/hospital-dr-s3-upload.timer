@@ -1,0 +1,11 @@
+[Unit]
+Description=Upload Hospital DR backup pairs to S3 at five and thirty-five minutes past each hour
+
+[Timer]
+OnCalendar=*-*-* *:05,35:00
+Persistent=true
+AccuracySec=30s
+Unit=hospital-dr-s3-upload.service
+
+[Install]
+WantedBy=timers.target

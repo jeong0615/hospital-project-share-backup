@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>환자 등록 — EMR</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+.step-indicator { display:flex; align-items:center; gap:0; margin-bottom:28px; }
+.step {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-3); letter-spacing: .06em;
+}
+.step-num {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  font-size: 10px; font-weight: 500;
+}
+.step.active { color: var(--accent); }
+.step.active .step-num { background: var(--accent); border-color: var(--accent); color:#fff; }
+.step.done { color: var(--success); }
+.step.done .step-num { background: rgba(30,201,122,.15); border-color: var(--success); color: var(--success); }
+.step-line { flex:1; height:1px; background: var(--border); margin: 0 10px; max-width:60px; }
+.success-overlay {
+  display: none;
+  position: fixed; inset:0;
+  background: rgba(0,0,0,.7);
+  z-index: 300; align-items:center; justify-content:center;
+}
+.success-overlay.open { display:flex; }
+.success-box {
+  background: var(--bg-card);
+  border: 1px solid var(--success);
+  border-radius: 12px;
+  padding: 36px 40px;
+  text-align: center;
+  width: 340px;
+  box-shadow: 0 0 40px rgba(30,201,122,.15);
+}
+.success-icon {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: rgba(30,201,122,.12);
+  border: 1px solid var(--success);
+  display: flex; align-items:center; justify-content:center;
+  margin: 0 auto 16px;
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <div id="sidebar-mount"></div>
+  <div class="main">
+    <div class="topbar">
+      <a href="patients.html" class="btn btn-ghost btn-sm" style="margin-right:4px;">
+        <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        목록
+      </a>
+      <div class="topbar-title">환자 신규 등록</div>
+    </div>
+
+    <div class="content" style="max-width:720px;">
+
+      <!-- 스텝 인디케이터 -->
+      <div class="step-indicator">
+        <div class="step active" id="step1-ind"><div class="step-num">1</div> 기본 정보</div>
+        <div class="step-line"></div>
+        <div class="step" id="step2-ind"><div class="step-num">2</div> 연락처</div>
+        <div class="step-line"></div>
+        <div class="step" id="step3-ind"><div class="step-num">3</div> 확인 및 등록</div>
+      </div>
+
+      <!-- STEP 1: 기본 정보 -->
+      <div id="step1" class="card">
+        <div class="card-title">기본 정보</div>
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label class="form-label">성명 <span class="req">*</span></label>
+            <input id="f-name" class="form-control" type="text" placeholder="홍길동">
+          </div>
+          <div class="form-group">
+            <label class="form-label">생년월일 <span class="req">*</span></label>
+            <input id="f-birth" class="form-control" type="date">
+          </div>
+          <div class="form-group">
+            <label class="form-label">성별 <span class="req">*</span></label>
+            <select id="f-gender" class="form-control">
+              <option value="">선택</option>
+              <option value="M">남성 (M)</option>
+              <option value="F">여성 (F)</option>
+            </select>
+          </div>
+        </div>
+        <div id="err1" class="alert alert-danger" style="display:none;margin-top:12px;">
+          <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          성명, 생년월일, 성별은 필수 입력 항목입니다.
+        </div>
+        <div class="flex gap-8 mt-16" style="justify-content:flex-end;">
+          <button class="btn btn-primary" onclick="goStep2()">다음 →</button>
+        </div>
+      </div>
+
+      <!-- STEP 2: 연락처 -->
+      <div id="step2" class="card" style="display:none;">
+        <div class="card-title">연락처 정보</div>
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label class="form-label">휴대폰</label>
+            <input id="f-phone" class="form-control" type="tel" placeholder="010-0000-0000" oninput="autoHyphen(this)">
+          </div>
+        </div>
+        <div class="alert alert-info" style="margin-top:12px;">
+          <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          연락처는 선택 항목입니다.
+        </div>
+        <div class="flex gap-8 mt-16" style="justify-content:flex-end;">
+          <button class="btn btn-ghost" onclick="goBack(1)">← 이전</button>
+          <button class="btn btn-primary" onclick="goStep3()">다음 →</button>
+        </div>
+      </div>
+
+      <!-- STEP 3: 확인 -->
+      <div id="step3" class="card" style="display:none;">
+        <div class="card-title">등록 정보 확인</div>
+        <div id="preview-grid" class="info-grid" style="margin-bottom:20px;"></div>
+        <hr class="divider">
+        <div class="flex gap-8" style="justify-content:flex-end;">
+          <button class="btn btn-ghost" onclick="goBack(2)">← 이전</button>
+          <button class="btn btn-primary" onclick="submitForm()">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            등록 완료
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 성공 팝업 -->
+<div class="success-overlay" id="successOverlay">
+  <div class="success-box">
+    <div class="success-icon">
+      <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="var(--success)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <div style="font-size:16px;font-weight:500;margin-bottom:6px;">등록 완료</div>
+    <div class="text-dim fs-12 mb-16" id="success-msg">환자가 성공적으로 등록되었습니다.</div>
+    <div style="display:flex;gap:8px;justify-content:center;">
+      <a href="patients.html" class="btn btn-ghost btn-sm">목록으로</a>
+      <button class="btn btn-primary btn-sm" onclick="registerAnother()">추가 등록</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js"></script>
+<script src="js/api.js"></script>
+<script src="js/patients.js"></script>
+<script>
+getUser(); renderSidebar('patient-register');
+
+function showStep(n) {
+  [1,2,3].forEach(i => {
+    document.getElementById('step'+i).style.display = i===n ? 'block' : 'none';
+    const ind = document.getElementById('step'+i+'-ind');
+    ind.className = 'step' + (i<n?' done':i===n?' active':'');
+  });
+}
+
+function goStep2() {
+  const name  = document.getElementById('f-name').value.trim();
+  const birth = document.getElementById('f-birth').value;
+  const gender= document.getElementById('f-gender').value;
+  const err   = document.getElementById('err1');
+  if (!name || !birth || !gender) { err.style.display='flex'; return; }
+  err.style.display = 'none';
+  showStep(2);
+}
+
+function goStep3() {
+  const name   = document.getElementById('f-name').value.trim();
+  const birth  = document.getElementById('f-birth').value;
+  const gender = document.getElementById('f-gender').value;
+  const phone  = document.getElementById('f-phone').value;
+
+  document.getElementById('preview-grid').innerHTML = `
+    <div class="info-item">
+      <div class="info-key">성명</div>
+      <div class="info-val fw-500">${name}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-key">성별</div>
+      <div class="info-val">${gender==='M'?'남성':'여성'}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-key">생년월일</div>
+      <div class="info-val text-mono">${birth}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-key">나이</div>
+      <div class="info-val">${age(birth)}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-key">연락처</div>
+      <div class="info-val">${phone || '—'}</div>
+    </div>
+  `;
+  showStep(3);
+}
+
+function goBack(n) { showStep(n); }
+
+async function submitForm() {
+  const patientData = {
+    name: document.getElementById('f-name').value.trim(),
+    birth_date: document.getElementById('f-birth').value,
+    gender: document.getElementById('f-gender').value,
+    phone: document.getElementById('f-phone').value
+  };
+
+  try {
+    await registerPatient(patientData);
+    document.getElementById('success-msg').textContent = `${patientData.name} 환자가 성공적으로 등록되었습니다.`;
+    document.getElementById('successOverlay').classList.add('open');
+  } catch (error) {
+    alert(error.message || '환자 등록 중 오류가 발생했습니다.');
+  }
+}
+
+function registerAnother() {
+  document.getElementById('successOverlay').classList.remove('open');
+  document.getElementById('f-name').value  = '';
+  document.getElementById('f-birth').value = '';
+  document.getElementById('f-gender').value = '';
+  document.getElementById('f-phone').value = '';
+  showStep(1);
+}
+
+function autoHyphen(el) {
+  let v = el.value.replace(/\D/g,'');
+  if (v.length > 11) v = v.slice(0,11);
+  if (v.length <= 3) el.value = v;
+  else if (v.length <= 7) el.value = v.slice(0,3)+'-'+v.slice(3);
+  else el.value = v.slice(0,3)+'-'+v.slice(3,7)+'-'+v.slice(7);
+}
+</script>
+</body>
+</html>

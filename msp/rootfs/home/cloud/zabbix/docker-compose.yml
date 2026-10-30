@@ -1,0 +1,64 @@
+version: '3.5'
+services:
+  zabbix-db:
+    image: postgres:14-alpine
+    restart: always
+    volumes:
+      - ./zbx_db_data:/var/lib/postgresql/data:rw
+    env_file:
+      - .env_db_pgsql
+
+  zabbix-server:
+    image: hospital-dr-zabbix-server:6.0-python3
+    restart: always
+    group_add:
+      - "${DR_STATE_HOST_GID:-1000}"
+    ports:
+      - "10051:10051"
+    volumes:
+      - ./zbx_snmptraps:/var/lib/zabbix/snmptraps:rw
+      - /home/cloud/send_slack.sh:/usr/lib/zabbix/alertscripts/send_slack.sh:ro
+      - /home/cloud/send_failback.sh:/usr/lib/zabbix/alertscripts/send_failback.sh:ro
+      - /home/cloud/hospital-dr-codex/operations/db/zabbix_failback_guard.sh:/usr/lib/zabbix/alertscripts/zabbix_failback_guard.sh:ro
+      - /home/cloud/hospital-dr-codex/operations/db/failback_stability.sh:/usr/lib/zabbix/alertscripts/failback_stability.sh:ro
+      - /home/cloud/hospital-dr-codex/operations/runtime_paths.sh:/usr/lib/zabbix/runtime_paths.sh:ro
+      - /home/cloud/hospital-dr-codex/operations/runtime/dr_state.sh:/usr/lib/zabbix/dr_state.sh:ro
+      - /var/lib/hospital-dr:/var/lib/hospital-dr:rw
+    environment:
+      CHATOPS_REQUEST_URL: http://IP_REDACTED:5001/chatops/request
+      DR_RUNTIME_PATHS: /usr/lib/zabbix/runtime_paths.sh
+      DR_STATE_DIR: /var/lib/hospital-dr
+      DR_STATE_FILE: /var/lib/hospital-dr/dr_state
+      DR_STATE_LOCK_FILE: /var/lib/hospital-dr/dr_state.lock
+      DR_STATE_HELPER: /usr/lib/zabbix/dr_state.sh
+      DR_STATE_FILE_MODE: "0660"
+      DR_LOG_DIR: /var/lib/hospital-dr
+    env_file:
+      - .env_db_pgsql
+      - .env_srv
+    depends_on:
+      - zabbix-db
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:6.0-ubuntu-latest
+    restart: always
+    ports:
+      - "80:8080"
+      - "443:8443"
+    env_file:
+      - .env_db_pgsql
+      - .env_web
+    depends_on:
+      - zabbix-db
+
+  zabbix-agent:
+    image: zabbix/zabbix-agent:6.0-ubuntu-latest
+    restart: always
+    ports:
+      - "10050:10050"
+    env_file:
+      - .env_srv
+    environment:
+      - ZBX_SERVER_HOST=zabbix-zabbix-server-1
+      - ZBX_HOSTNAME=Zabbix server
+    privileged: true

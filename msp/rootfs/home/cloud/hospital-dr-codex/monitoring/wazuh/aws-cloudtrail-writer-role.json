@@ -1,0 +1,23 @@
+{
+  "role": "hospital_aws_cloudtrail_writer",
+  "purpose": "Least-privilege writer for normalized AWS CloudTrail Event History documents",
+  "cluster_permissions": [],
+  "index_permissions": [
+    {
+      "index_patterns": [
+        "hospital-aws-cloud-events"
+      ],
+      "allowed_actions": [
+        "indices:admin/get",
+        "indices:admin/create",
+        "indices:admin/mapping/put",
+        "indices:data/read/get",
+        "indices:data/read/search*",
+        "indices:data/write/index",
+        "indices:data/write/bulk[s]",
+        "indices:data/write/update"
+      ]
+    }
+  ],
+  "tenant_permissions": []
+}

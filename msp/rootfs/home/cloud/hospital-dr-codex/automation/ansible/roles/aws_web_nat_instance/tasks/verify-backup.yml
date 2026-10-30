@@ -1,0 +1,23 @@
+---
+- name: Read private baseline backup metadata
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_backup_item.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_backup_stat
+  when: aws_web_nat_instance_backup_item.exists | bool
+  no_log: true
+
+- name: Require the original baseline backup to be intact and private
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_backup_stat.stat.exists
+      - aws_web_nat_instance_backup_stat.stat.isreg | default(false)
+      - not aws_web_nat_instance_backup_stat.stat.islnk | default(false)
+      - aws_web_nat_instance_backup_stat.stat.pw_name == 'root'
+      - aws_web_nat_instance_backup_stat.stat.mode == '0600'
+      - aws_web_nat_instance_backup_stat.stat.checksum == aws_web_nat_instance_backup_item.sha256
+    fail_msg: "A private NAT baseline backup is missing, changed, or not root-only; refusing restore."
+  when: aws_web_nat_instance_backup_item.exists | bool
+  no_log: true

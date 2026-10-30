@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>대시보드 — EMR</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="layout">
+  <div id="sidebar-mount"></div>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-title">대시보드</div>
+      <div class="topbar-sub" id="today-str"></div>
+    </div>
+
+    <div class="content">
+
+      <!-- Stats -->
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">오늘 외래</div>
+          <div class="stat-value" id="stat-today">—</div>
+          <div class="stat-sub">명 내원</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">전체 환자</div>
+          <div class="stat-value" id="stat-total">—</div>
+          <div class="stat-sub">등록 환자</div>
+        </div>
+        <div class="stat-card warn">
+          <div class="stat-label">이번 달 진료</div>
+          <div class="stat-value" id="stat-month">—</div>
+          <div class="stat-sub">건 진료기록</div>
+        </div>
+        <div class="stat-card danger">
+          <div class="stat-label">미완료 차트</div>
+          <div class="stat-value">0</div>
+          <div class="stat-sub">건 미작성</div>
+        </div>
+      </div>
+
+      <div class="flex gap-20">
+
+        <!-- 최근 진료 -->
+        <div class="card flex-1">
+          <div class="card-title">최근 진료 기록</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>환자명</th>
+                  <th>진료과</th>
+                  <th>진료일</th>
+                  <th>담당의</th>
+                </tr>
+              </thead>
+              <tbody id="recent-records">
+                <tr><td colspan="4" class="muted" style="text-align:center;padding:24px;">데이터를 불러오는 중...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 빠른 메뉴 -->
+        <div style="width:220px; flex-shrink:0;">
+          <div class="card">
+            <div class="card-title">빠른 메뉴</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <a href="patient-register.html" class="btn btn-primary" style="justify-content:flex-start;">
+                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+                환자 신규 등록
+              </a>
+              <a href="patients.html" class="btn btn-ghost" style="justify-content:flex-start;">
+                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                환자 검색
+              </a>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">시스템 상태</div>
+            <div style="display:flex;flex-direction:column;gap:10px;font-size:12.5px;">
+              <div class="flex items-center justify-between">
+                <span class="text-muted">DB 연결</span>
+                <span class="badge badge-green">정상</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-muted">서버</span>
+                <span class="badge badge-green">운영 중</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-muted">백업</span>
+                <span class="badge badge-gray">금일 03:00</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <div class="card-title">최근 Web 예약</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>예약번호</th>
+                <th>예약자</th>
+                <th>진료과</th>
+                <th>요청</th>
+                <th>접수 시각</th>
+              </tr>
+            </thead>
+            <tbody id="recent-web-reservations">
+              <tr><td colspan="5" class="muted" style="text-align:center;padding:24px;">예약을 불러오는 중...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js"></script>
+<script src="js/api.js"></script>
+<script src="js/medical-records.js"></script>
+<script>
+const user = getUser();
+renderSidebar('dashboard');
+
+// 날짜 세팅
+const now = new Date();
+document.getElementById('today-str').textContent =
+  now.toLocaleDateString('ko-KR', { year:'numeric', month:'long', day:'numeric', weekday:'long' });
+
+function setReservationMessage(message) {
+  const tbody = document.getElementById('recent-web-reservations');
+  const row = document.createElement('tr');
+  const cell = document.createElement('td');
+  cell.colSpan = 5;
+  cell.className = 'muted';
+  cell.style.textAlign = 'center';
+  cell.style.padding = '24px';
+  cell.textContent = message;
+  row.appendChild(cell);
+  tbody.replaceChildren(row);
+}
+
+async function loadRecentWebReservations() {
+  try {
+    const result = await api.get('/reservations/recent');
+    if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+      setReservationMessage('접수된 Web 예약이 없습니다.');
+      return;
+    }
+
+    const tbody = document.getElementById('recent-web-reservations');
+    const rows = result.data.map(reservation => {
+      const row = document.createElement('tr');
+      [reservation.reservation_id, reservation.patient_name, reservation.department,
+        reservation.title, reservation.created_at].forEach(value => {
+        const cell = document.createElement('td');
+        cell.textContent = value === null || value === undefined ? '—' : String(value);
+        row.appendChild(cell);
+      });
+      return row;
+    });
+    tbody.replaceChildren(...rows);
+  } catch (_) {
+    setReservationMessage('Web 예약을 불러오지 못했습니다.');
+  }
+}
+
+// API 연동을 통한 데이터 로드
+async function loadDashboardData() {
+  // 1. 대시보드 통계 데이터 렌더링
+  const stats = await fetchDashboardStats();
+  if (stats) {
+    document.getElementById('stat-today').textContent = stats.today_visits || '0';
+    document.getElementById('stat-total').textContent = stats.total_patients || '0';
+    document.getElementById('stat-month').textContent = stats.month_records || '0';
+  } else {
+    document.getElementById('stat-today').textContent = '0';
+    document.getElementById('stat-total').textContent = '0';
+    document.getElementById('stat-month').textContent = '0';
+  }
+
+  // 2. 최근 진료 기록 렌더링
+  const recentRecords = await fetchRecentRecords();
+  const tbody = document.getElementById('recent-records');
+
+  if (!recentRecords || recentRecords.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="muted" style="text-align:center;padding:24px;">최근 진료 기록이 없습니다.</td></tr>`;
+  } else {
+    tbody.innerHTML = recentRecords.map(r => `
+  <tr onclick="window.location.href='patients.html'">
+    <td class="fw-500">${r.name}</td>
+    <td class="muted">${r.dept}</td> <td class="mono">${r.date}</td>
+    <td class="muted">${r.doctor || '—'}</td>
+  </tr>
+`).join('');
+  }
+
+  await loadRecentWebReservations();
+}
+
+// 페이지 로드 시 실행
+loadDashboardData();
+</script>
+</body>
+</html>

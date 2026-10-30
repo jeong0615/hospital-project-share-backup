@@ -1,0 +1,29 @@
+[Unit]
+Description=Hospital DR AWS CloudTrail Event History collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cloud
+Group=cloud
+WorkingDirectory=/home/cloud/hospital-dr-codex
+Environment=HOME=/home/cloud
+Environment=AWS_REGION=ap-northeast-2
+Environment=AWS_CLOUDTRAIL_STATE_FILE=/var/lib/hospital-dr/aws-cloudtrail-collector.json
+Environment=AWS_INDEXER_URL=https://wazuh.indexer:9200
+Environment=AWS_INDEXER_CONNECT_IP=AWS_PUBLIC_IP_REDACTED
+Environment=AWS_INDEXER_HOST_HEADER=wazuh.indexer
+Environment=AWS_INDEXER_CA_SOURCE=/home/cloud/hospital-dr-codex/monitoring/grafana/provisioning/datasources/wazuh.yml
+Environment=AWS_INDEXER_CREDENTIAL_SOURCE=/home/cloud/wazuh-docker/single-node/docker-compose.yml
+EnvironmentFile=-/home/cloud/hospital-dr-secrets/aws-indexer-writer.env
+ExecStart=/usr/bin/python3 /home/cloud/hospital-dr-codex/operations/security/aws_cloudtrail_collector.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/hospital-dr
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=Deprecated no-op NAT shutdown hook (manual NAT lifecycle only)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=cloud
+Environment=DR_REPO_ROOT=/home/cloud/hospital-dr-codex
+Environment=DR_TERRAFORM_DIR=/home/cloud/hospital-dr-terraform
+Environment=DR_OPERATIONS_DIR=/home/cloud/hospital-dr-codex/operations
+Environment=DR_SECRET_FILE=/home/cloud/hospital-dr-secrets/dr.env
+StateDirectory=hospital-dr
+StateDirectoryMode=0750
+RemainAfterExit=yes
+ExecStart=/bin/true
+# NAT must not be deleted implicitly when the controller or host stops. Use
+# operations/nat/nat_disable.sh explicitly after checking the DR state.
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=multi-user.target

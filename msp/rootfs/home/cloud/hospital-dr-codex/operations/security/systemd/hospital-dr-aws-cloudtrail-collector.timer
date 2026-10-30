@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Hospital DR AWS CloudTrail Event History collector
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=hospital-dr-aws-cloudtrail-collector.service
+
+[Install]
+WantedBy=timers.target

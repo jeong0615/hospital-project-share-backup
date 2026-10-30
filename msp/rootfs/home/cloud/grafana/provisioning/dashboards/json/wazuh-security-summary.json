@@ -1,0 +1,158 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Alerts",
+      "description": "Total Wazuh alerts in the selected time range.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 100}, {"color": "red", "value": 500}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto", "colorMode": "value"},
+      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Rule Level Distribution",
+      "description": "Alert count grouped by Wazuh rule.level.",
+      "gridPos": {"h": 8, "w": 9, "x": 6, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 7}, {"color": "red", "value": 10}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "alias": "level-3", "query": "rule.level:3", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "B", "alias": "level-4", "query": "rule.level:4", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "C", "alias": "level-5", "query": "rule.level:5", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "D", "alias": "level-7", "query": "rule.level:7", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "E", "alias": "level-9", "query": "rule.level:9", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Alerts Over Time",
+      "description": "Wazuh alert volume by time.",
+      "gridPos": {"h": 8, "w": 9, "x": 15, "y": 0},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Alerts by Agent",
+      "description": "Alert count grouped by agent.name.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "alias": "hospital-db", "query": "agent.name:hospital-db", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "B", "alias": "hospital-emr", "query": "agent.name:hospital-emr", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "C", "alias": "hospital-web", "query": "agent.name:hospital-web", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "D", "alias": "wazuh.manager", "query": "agent.name:wazuh.manager", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Top Rules",
+      "description": "Observed high-volume rule IDs from the real Wazuh index. Each series is a real indexed query; no synthetic rows are added.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "alias": "rule-19007", "query": "rule.id:19007", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "B", "alias": "rule-19008", "query": "rule.id:19008", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "C", "alias": "rule-502", "query": "rule.id:502", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "D", "alias": "rule-510", "query": "rule.id:510", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "E", "alias": "rule-5502", "query": "rule.id:5502", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "Recent Security Events",
+      "description": "Recent Wazuh events. Detailed investigation remains in Wazuh Dashboard.",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 16},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
+      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Authentication Events",
+      "description": "Authentication failures and invalid-login signals in the selected time range.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 25},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 10}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "colorMode": "value"},
+      "targets": [{"refId": "A", "query": "rule.groups:(authentication_failed OR authentication_failure OR invalid_login) OR rule.id:(2501 OR 5710 OR 5711 OR 5712)", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "FIM Events",
+      "description": "File-integrity signals. Live endpoint coverage is separate from Indexer ingestion.",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 25},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "colorMode": "value"},
+      "targets": [{"refId": "A", "query": "rule.groups:(syscheck OR syscheck_entry_added OR syscheck_file)", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "SCA Events",
+      "description": "Security Configuration Assessment results indexed by Wazuh.",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 25},
+      "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "colorMode": "value"},
+      "targets": [{"refId": "A", "query": "rule.groups:sca OR rule.id:(19004 OR 19005 OR 19007 OR 19008 OR 19009)", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Vulnerability Events",
+      "description": "Real Wazuh vulnerability-state documents. Empty data means no indexed findings, not a fabricated zero.",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 25},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALWAZUHVULN"},
+      "fieldConfig": {"defaults": {"unit": "short", "mappings": [{"type": "value", "options": {"0": {"text": "NO INDEXED FINDINGS", "color": "gray"}}}]}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "colorMode": "value"},
+      "targets": [{"refId": "A", "query": "*", "timeField": "vulnerability.detected_at", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "vulnerability.detected_at"}}]}]
+    },
+    {
+      "id": 11,
+      "type": "logs",
+      "title": "Latest Vulnerability Findings",
+      "description": "Actual CVE/package findings from the Wazuh vulnerability state index. Current endpoint refresh depends on connected agents.",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 30},
+      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALWAZUHVULN"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
+      "targets": [{"refId": "A", "query": "*", "timeField": "vulnerability.detected_at", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "vulnerability.detected_at"}}]}]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["wazuh", "security", "summary"],
+  "templating": {"list": []},
+  "time": {"from": "now-30d", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Wazuh Security Summary",
+  "uid": "wazuh-security-summary",
+  "version": 1
+}

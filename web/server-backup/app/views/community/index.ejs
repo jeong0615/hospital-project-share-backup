@@ -1,0 +1,11 @@
+<%- include('../partials/header') %>
+<div class="content-card">
+  <h1><%= title %></h1>
+  <p class="muted">고객참여는 예약 메뉴와 분리되어 운영됩니다.</p>
+  <div class="link-grid">
+    <% items.forEach(item => { %>
+      <a class="link-tile" href="<%= item.url %>"><%= item.label %></a>
+    <% }) %>
+  </div>
+</div>
+<%- include('../partials/footer') %>

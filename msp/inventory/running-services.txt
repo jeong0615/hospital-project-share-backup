@@ -1,0 +1,41 @@
+# systemctl --type=service --state=running
+  accounts-daemon.service           loaded active running Accounts Service
+  acpid.service                     loaded active running ACPI event daemon
+  avahi-daemon.service              loaded active running Avahi mDNS/DNS-SD Stack
+  colord.service                    loaded active running Manage, Install and Generate Color Profiles
+  containerd.service                loaded active running containerd container runtime
+  cron.service                      loaded active running Regular background program processing daemon
+  cups-browsed.service              loaded active running Make remote CUPS printers available locally
+  cups.service                      loaded active running CUPS Scheduler
+  dbus.service                      loaded active running D-Bus System Message Bus
+  docker.service                    loaded active running Docker Application Container Engine
+  gdm.service                       loaded active running GNOME Display Manager
+  hospital-dr-chatops-ngrok.service loaded active running Hospital DR ChatOps ngrok tunnel
+  hospital-dr-chatops.service       loaded active running Hospital DR ChatOps approval service
+  hospital-dr-zabbix-proxy.service  loaded active running Hospital DR Zabbix to ChatOps internal proxy
+  irqbalance.service                loaded active running irqbalance daemon
+  kerneloops.service                loaded active running Tool to automatically collect and submit kernel crash signatures
+  ModemManager.service              loaded active running Modem Manager
+  mysql.service                     loaded active running MySQL Community Server
+  networkd-dispatcher.service       loaded active running Dispatcher daemon for systemd-networkd
+  NetworkManager.service            loaded active running Network Manager
+  packagekit.service                loaded active running PackageKit Daemon
+  polkit.service                    loaded active running Authorization Manager
+  power-profiles-daemon.service     loaded active running Power Profiles daemon
+  rsyslog.service                   loaded active running System Logging Service
+  rtkit-daemon.service              loaded active running RealtimeKit Scheduling Policy Service
+  snapd.service                     loaded active running Snap Daemon
+  ssh.service                       loaded active running OpenBSD Secure Shell server
+  switcheroo-control.service        loaded active running Switcheroo Control Proxy service
+  systemd-journald.service          loaded active running Journal Service
+  systemd-logind.service            loaded active running User Login Management
+  systemd-oomd.service              loaded active running Userspace Out-Of-Memory (OOM) Killer
+  systemd-resolved.service          loaded active running Network Name Resolution
+  systemd-timesyncd.service         loaded active running Network Time Synchronization
+  systemd-udevd.service             loaded active running Rule-based Manager for Device Events and Files
+  udisks2.service                   loaded active running Disk Manager
+  unattended-upgrades.service       loaded active running Unattended Upgrades Shutdown
+  upower.service                    loaded active running Daemon for power management
+  user@1000.service                 loaded active running User Manager for UID 1000
+  uuidd.service                     loaded active running Daemon for generating UUIDs
+  wpa_supplicant.service            loaded active running WPA supplicant

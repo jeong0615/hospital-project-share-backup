@@ -1,0 +1,21 @@
+{
+  "role": "grafana_wazuh_readonly",
+  "purpose": "Grafana read-only access to Wazuh alerts, vulnerability state, normalized project security indices, and AWS CloudTrail events",
+  "cluster_permissions": [
+    "cluster_monitor"
+  ],
+  "index_permissions": [
+    {
+      "index_patterns": [
+        "wazuh-alerts-*",
+        "wazuh-states-vulnerabilities-*",
+        "hospital-devsecops-executions",
+        "hospital-security-incidents",
+        "hospital-aws-cloud-events"
+      ],
+      "allowed_actions": [
+        "read"
+      ]
+    }
+  ]
+}

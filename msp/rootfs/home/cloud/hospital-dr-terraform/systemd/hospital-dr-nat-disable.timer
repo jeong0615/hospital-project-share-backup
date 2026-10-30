@@ -1,0 +1,10 @@
+[Unit]
+Description=Delete Hospital DR NAT Gateway every evening
+
+[Timer]
+OnCalendar=*-*-* 18:30:00 Asia/Seoul
+Persistent=true
+Unit=hospital-dr-nat-disable.service
+
+[Install]
+WantedBy=timers.target

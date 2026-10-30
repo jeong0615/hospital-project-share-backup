@@ -1,0 +1,262 @@
+---
+- name: Require a loaded exact-target NAT baseline
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_baseline is defined
+      - aws_web_nat_instance_baseline.schema_version == 1
+      - aws_web_nat_instance_baseline.instance_id == aws_web_nat_instance_expected_instance_id
+      - aws_web_nat_instance_baseline.eni == aws_web_nat_instance_expected_eni
+      - aws_web_nat_instance_baseline.runtime.ip_forward in ['0', '1']
+    fail_msg: "NAT baseline is missing, malformed, or for another target; nothing will be removed."
+  no_log: true
+
+- name: Verify private baseline backup files before using them
+  ansible.builtin.include_tasks: verify-backup.yml
+  loop:
+    - name: sysctl
+      path: "{{ aws_web_nat_instance_baseline.files.sysctl.backup }}"
+      exists: "{{ aws_web_nat_instance_baseline.files.sysctl.exists }}"
+      sha256: "{{ aws_web_nat_instance_baseline.files.sysctl.sha256 }}"
+    - name: controller
+      path: "{{ aws_web_nat_instance_baseline.files.controller.backup }}"
+      exists: "{{ aws_web_nat_instance_baseline.files.controller.exists }}"
+      sha256: "{{ aws_web_nat_instance_baseline.files.controller.sha256 }}"
+    - name: service
+      path: "{{ aws_web_nat_instance_baseline.files.service.backup }}"
+      exists: "{{ aws_web_nat_instance_baseline.files.service.exists }}"
+      sha256: "{{ aws_web_nat_instance_baseline.files.service.sha256 }}"
+  loop_control:
+    loop_var: aws_web_nat_instance_backup_item
+    label: "{{ aws_web_nat_instance_backup_item.name }}"
+  no_log: true
+
+- name: Read current sysctl file before rollback
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_baseline.files.sysctl.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_current_sysctl
+
+- name: Read current NAT controller before rollback
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_baseline.files.controller.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_current_controller
+
+- name: Read current systemd unit before rollback
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_baseline.files.service.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_current_unit
+
+- name: Read current runtime forwarding and iptables package state before rollback
+  ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+  register: aws_web_nat_instance_current_ip_forward
+  changed_when: false
+
+- name: Read current iptables package state before rollback
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - -f=${db:Status-Status}
+      - iptables
+  register: aws_web_nat_instance_current_package
+  changed_when: false
+
+- name: Refuse rollback over unexpected guest-side drift
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_baseline.applied is not defined or (aws_web_nat_instance_current_sysctl.stat.exists and aws_web_nat_instance_current_sysctl.stat.checksum == aws_web_nat_instance_baseline.applied.files.sysctl.sha256)
+      - aws_web_nat_instance_baseline.applied is not defined or (aws_web_nat_instance_current_controller.stat.exists and aws_web_nat_instance_current_controller.stat.checksum == aws_web_nat_instance_baseline.applied.files.controller.sha256)
+      - aws_web_nat_instance_baseline.applied is not defined or (aws_web_nat_instance_current_unit.stat.exists and aws_web_nat_instance_current_unit.stat.checksum == aws_web_nat_instance_baseline.applied.files.service.sha256)
+      - aws_web_nat_instance_baseline.applied is not defined or aws_web_nat_instance_current_ip_forward.stdout | trim == aws_web_nat_instance_baseline.applied.ip_forward
+      - aws_web_nat_instance_baseline.runtime.iptables_installed | bool
+      - aws_web_nat_instance_current_package.stdout | trim == 'installed'
+    fail_msg: "Guest configuration changed after NAT apply; rollback is blocked to avoid overwriting unrelated changes."
+  no_log: true
+
+- name: Check whether the recorded firewall baseline is present
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_firewall_baseline_file }}"
+    follow: false
+  register: aws_web_nat_instance_firewall_baseline_stat
+
+- name: Stop the temporary NAT unit before restoring files
+  ansible.builtin.systemd:
+    name: "{{ aws_web_nat_instance_service }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  when: aws_web_nat_instance_firewall_baseline_stat.stat.exists
+
+- name: Restore the exact firewall baseline using only verified owned chains
+  ansible.builtin.command: "{{ aws_web_nat_instance_script }} remove"
+  register: aws_web_nat_instance_firewall_remove
+  changed_when: "'RESTORED' in aws_web_nat_instance_firewall_remove.stdout"
+  when: aws_web_nat_instance_firewall_baseline_stat.stat.exists
+
+- name: Read back the restored firewall baseline
+  ansible.builtin.command: "{{ aws_web_nat_instance_script }} verify-baseline"
+  changed_when: false
+  when: aws_web_nat_instance_firewall_baseline_stat.stat.exists
+
+- name: Restore the original NAT controller content and metadata
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ aws_web_nat_instance_baseline.files.controller.backup }}"
+    dest: "{{ aws_web_nat_instance_baseline.files.controller.path }}"
+    owner: "{{ aws_web_nat_instance_baseline.files.controller.uid }}"
+    group: "{{ aws_web_nat_instance_baseline.files.controller.gid }}"
+    mode: "{{ aws_web_nat_instance_baseline.files.controller.mode }}"
+  when: aws_web_nat_instance_baseline.files.controller.exists | bool
+
+- name: Remove the NAT controller if it did not exist before apply
+  ansible.builtin.file:
+    path: "{{ aws_web_nat_instance_baseline.files.controller.path }}"
+    state: absent
+  when: not (aws_web_nat_instance_baseline.files.controller.exists | bool)
+
+- name: Restore the original systemd unit content and metadata
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ aws_web_nat_instance_baseline.files.service.backup }}"
+    dest: "{{ aws_web_nat_instance_baseline.files.service.path }}"
+    owner: "{{ aws_web_nat_instance_baseline.files.service.uid }}"
+    group: "{{ aws_web_nat_instance_baseline.files.service.gid }}"
+    mode: "{{ aws_web_nat_instance_baseline.files.service.mode }}"
+  when: aws_web_nat_instance_baseline.files.service.exists | bool
+
+- name: Remove the NAT systemd unit if it did not exist before apply
+  ansible.builtin.file:
+    path: "{{ aws_web_nat_instance_baseline.files.service.path }}"
+    state: absent
+  when: not (aws_web_nat_instance_baseline.files.service.exists | bool)
+
+- name: Restore the original sysctl file content and metadata
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ aws_web_nat_instance_baseline.files.sysctl.backup }}"
+    dest: "{{ aws_web_nat_instance_baseline.files.sysctl.path }}"
+    owner: "{{ aws_web_nat_instance_baseline.files.sysctl.uid }}"
+    group: "{{ aws_web_nat_instance_baseline.files.sysctl.gid }}"
+    mode: "{{ aws_web_nat_instance_baseline.files.sysctl.mode }}"
+  when: aws_web_nat_instance_baseline.files.sysctl.exists | bool
+
+- name: Remove the sysctl file if it did not exist before apply
+  ansible.builtin.file:
+    path: "{{ aws_web_nat_instance_baseline.files.sysctl.path }}"
+    state: absent
+  when: not (aws_web_nat_instance_baseline.files.sysctl.exists | bool)
+
+- name: Reload systemd after restoring the original unit
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restore the original runtime IPv4 forwarding value
+  ansible.builtin.command: "sysctl -w net.ipv4.ip_forward={{ aws_web_nat_instance_baseline.runtime.ip_forward }}"
+  register: aws_web_nat_instance_sysctl_restore
+  changed_when: true
+
+- name: Restore the original NAT service active state
+  ansible.builtin.systemd:
+    name: "{{ aws_web_nat_instance_service }}"
+    state: "{{ 'started' if aws_web_nat_instance_baseline.runtime.service_active | bool else 'stopped' }}"
+    daemon_reload: true
+  when: aws_web_nat_instance_baseline.runtime.service_fragment | length > 0
+
+- name: Restore the original NAT service enabled state
+  ansible.builtin.systemd:
+    name: "{{ aws_web_nat_instance_service }}"
+    enabled: "{{ aws_web_nat_instance_baseline.runtime.service_enabled | bool }}"
+    daemon_reload: true
+  when: aws_web_nat_instance_baseline.runtime.service_fragment | length > 0
+
+- name: Read back the restored sysctl file
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_baseline.files.sysctl.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_restored_sysctl
+
+- name: Read back the restored controller file
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_baseline.files.controller.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_restored_controller
+
+- name: Read back the restored service unit file
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_baseline.files.service.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_restored_unit
+
+- name: Verify restored file presence and content checksums
+  ansible.builtin.assert:
+    that:
+      - (aws_web_nat_instance_restored_sysctl.stat.exists | bool) == (aws_web_nat_instance_baseline.files.sysctl.exists | bool)
+      - not (aws_web_nat_instance_baseline.files.sysctl.exists | bool) or aws_web_nat_instance_restored_sysctl.stat.checksum == aws_web_nat_instance_baseline.files.sysctl.sha256
+      - (aws_web_nat_instance_restored_controller.stat.exists | bool) == (aws_web_nat_instance_baseline.files.controller.exists | bool)
+      - not (aws_web_nat_instance_baseline.files.controller.exists | bool) or aws_web_nat_instance_restored_controller.stat.checksum == aws_web_nat_instance_baseline.files.controller.sha256
+      - (aws_web_nat_instance_restored_unit.stat.exists | bool) == (aws_web_nat_instance_baseline.files.service.exists | bool)
+      - not (aws_web_nat_instance_baseline.files.service.exists | bool) or aws_web_nat_instance_restored_unit.stat.checksum == aws_web_nat_instance_baseline.files.service.sha256
+    fail_msg: "NAT baseline file restoration could not be verified; baseline state is retained."
+
+- name: Read back runtime IPv4 forwarding
+  ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+  register: aws_web_nat_instance_restored_ip_forward
+  changed_when: false
+
+- name: Verify original runtime and package state
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - -f=${db:Status-Status}
+      - iptables
+  register: aws_web_nat_instance_restored_package
+  changed_when: false
+
+- name: Confirm runtime and shared package state were preserved
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_restored_ip_forward.stdout | trim == aws_web_nat_instance_baseline.runtime.ip_forward
+      - aws_web_nat_instance_restored_package.stdout | trim == 'installed'
+      - aws_web_nat_instance_baseline.runtime.iptables_installed | bool
+    fail_msg: "Runtime sysctl or shared iptables package state differs from the baseline."
+  no_log: true
+
+- name: Verify restored NAT service active state
+  ansible.builtin.command: "systemctl is-active {{ aws_web_nat_instance_service }}"
+  register: aws_web_nat_instance_restored_service_active
+  changed_when: false
+  failed_when: false
+
+- name: Verify restored NAT service enabled state
+  ansible.builtin.command: "systemctl is-enabled {{ aws_web_nat_instance_service }}"
+  register: aws_web_nat_instance_restored_service_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Confirm original NAT service state is restored
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_restored_service_active.stdout | trim == aws_web_nat_instance_baseline.runtime.service_active_status
+      - aws_web_nat_instance_restored_service_enabled.stdout | trim == aws_web_nat_instance_baseline.runtime.service_enabled_status
+    fail_msg: "Original NAT service active/enabled state differs from the baseline."
+  no_log: true
+
+- name: Remove private baseline only after every restoration check passes
+  ansible.builtin.file:
+    path: "{{ aws_web_nat_instance_state_dir }}"
+    state: absent

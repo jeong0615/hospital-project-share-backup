@@ -1,0 +1,15 @@
+expected_account_id          = "AWS_ACCOUNT_ID_REDACTED"
+region                       = "ap-northeast-2"
+enable_probe                 = false
+confirmation                 = ""
+run_id                       = ""
+availability_zone            = ""
+vpc_cidr                     = "AWS_PUBLIC_IP_REDACTED/16" # placeholder only; choose after checking every VPC
+subnet_cidr                  = "AWS_PUBLIC_IP_REDACTED/24" # placeholder only; must be within selected VPC
+probe_private_ip             = "AWS_PUBLIC_IP_REDACTED" # placeholder only; must be free in selected subnet
+synthetic_ami_id             = "AWS_RESOURCE_ID_REDACTED" # Re-verify owner/state/architecture in Seoul before approval.
+probe_domain                 = "nat-probe.hospital-web.pp.ua"
+certificate_parameter_name  = ""
+private_key_parameter_name  = ""
+kms_key_arn                  = ""
+allowed_web_eip_ipv4         = "DISABLED"

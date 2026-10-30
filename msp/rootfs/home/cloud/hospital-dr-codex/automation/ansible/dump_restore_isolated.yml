@@ -1,0 +1,271 @@
+---
+- name: Prepare and optionally restore into the isolated dump-validation MySQL host
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_restore_mysql_mount: /var/lib/mysql
+    dump_restore_stage_mount: /var/lib/hospital-dr-dump-restore
+    dump_restore_helper_path: /usr/local/sbin/hospital-dr-isolated-restore
+  pre_tasks:
+    - name: Check whether service-listener promotion has already been prepared
+      ansible.builtin.stat:
+        path: /etc/mysql/mysql.conf.d/zz-hospital-dr-service-listener.cnf
+      register: dump_restore_service_listener_config
+
+    - name: Refuse restore after the isolated DB entered service preparation
+      ansible.builtin.assert:
+        that:
+          - not dump_restore_service_listener_config.stat.exists
+        fail_msg: Service-prepared isolated DB cannot be reused for restore; review and re-isolate it first.
+
+    - name: Require an explicit isolated-host identity and two distinct volumes
+      ansible.builtin.assert:
+        that:
+          - dump_restore_expected_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_restore_expected_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_restore_expected_private_ip is match('^10[.]20[.]30[.][0-9]{1,3}$')
+          - dump_restore_expected_private_ip not in ['IP_REDACTED', 'IP_REDACTED']
+          - dump_restore_expected_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_restore_expected_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_restore_expected_data_volume_id != dump_restore_expected_stage_volume_id
+        fail_msg: Isolated restore identity or volume contract is invalid.
+
+    - name: Install the isolated-host verifier before touching disks
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../operations/db/isolated_restore_host.py"
+        dest: "{{ dump_restore_helper_path }}"
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Install the importable isolated-host verifier module
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../operations/db/isolated_restore_host.py"
+        dest: /usr/local/sbin/isolated_restore_host.py
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the separate isolated DB service-preparation helper
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../operations/db/isolated_db_service_host.py"
+        dest: /usr/local/sbin/hospital-dr-isolated-db-service
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Verify this is the explicitly selected isolated EC2 instance
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_restore_helper_path }}"
+          - verify-instance
+          - --instance-id
+          - "{{ dump_restore_expected_instance_id }}"
+          - --private-ip
+          - "{{ dump_restore_expected_private_ip }}"
+      changed_when: false
+
+  tasks:
+    - name: Resolve the exact encrypted MySQL data EBS device by its AWS volume serial
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_restore_helper_path }}"
+          - resolve-volume
+          - --volume-id
+          - "{{ dump_restore_expected_data_volume_id }}"
+      register: dump_restore_data_device
+      changed_when: false
+
+    - name: Resolve the exact encrypted restore-staging EBS device by its AWS volume serial
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_restore_helper_path }}"
+          - resolve-volume
+          - --volume-id
+          - "{{ dump_restore_expected_stage_volume_id }}"
+      register: dump_restore_stage_device
+      changed_when: false
+
+    - name: Prepare and mount the dedicated MySQL data EBS
+      ansible.builtin.include_tasks: tasks/prepare_isolated_volume.yml
+      vars:
+        isolated_volume_id: "{{ dump_restore_expected_data_volume_id }}"
+        isolated_volume_device: "{{ dump_restore_data_device.stdout }}"
+        isolated_volume_mount: "{{ dump_restore_mysql_mount }}"
+
+    - name: Prepare and mount the separate dump-staging EBS
+      ansible.builtin.include_tasks: tasks/prepare_isolated_volume.yml
+      vars:
+        isolated_volume_id: "{{ dump_restore_expected_stage_volume_id }}"
+        isolated_volume_device: "{{ dump_restore_stage_device.stdout }}"
+        isolated_volume_mount: "{{ dump_restore_stage_mount }}"
+
+    - name: Install only local MySQL and dump verification tools
+      ansible.builtin.apt:
+        name:
+          - mysql-server
+          - mysql-client
+          - openssl
+          - gzip
+        state: present
+        update_cache: true
+
+    - name: Stop package-default MySQL before applying the isolated listener contract
+      ansible.builtin.service:
+        name: mysql
+        state: stopped
+
+    - name: Bind isolated MySQL to loopback on a non-production port
+      ansible.builtin.lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: "^\\s*{{ item.key }}\\s*="
+        line: "{{ item.key }} = {{ item.value }}"
+        insertafter: "^\\[mysqld\\]"
+      loop:
+        - { key: port, value: "3307" }
+        - { key: bind-address, value: "IP_REDACTED" }
+        - { key: datadir, value: "/var/lib/mysql" }
+        - { key: local_infile, value: "0" }
+        - { key: mysqlx-bind-address, value: "IP_REDACTED" }
+
+    - name: Ensure the data and staging mount roots have restrictive ownership
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /var/lib/mysql, owner: mysql, group: mysql, mode: "0750" }
+        - { path: /var/lib/hospital-dr-dump-restore, owner: root, group: root, mode: "0700" }
+
+    - name: Start the isolated MySQL service
+      ansible.builtin.service:
+        name: mysql
+        state: started
+        enabled: true
+
+    - name: Wait for local MySQL socket readiness without opening a network listener
+      ansible.builtin.command:
+        argv: [mysqladmin, --protocol=socket, -uroot, ping]
+      register: dump_restore_mysql_ping
+      retries: 12
+      delay: 5
+      until: dump_restore_mysql_ping.rc == 0
+      changed_when: false
+
+    - name: Verify both EBS identities and the isolated MySQL port/data directory
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_restore_helper_path }}"
+          - verify-target
+          - --instance-id
+          - "{{ dump_restore_expected_instance_id }}"
+          - --private-ip
+          - "{{ dump_restore_expected_private_ip }}"
+          - --volume-id
+          - "{{ dump_restore_expected_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_restore_expected_stage_volume_id }}"
+      changed_when: false
+
+    - name: Require explicit confirmation and a complete dump pair before restore
+      ansible.builtin.assert:
+        that:
+          - dump_restore_confirm | default(false) | bool
+          - dump_restore_backup_controller_path is defined
+          - dump_restore_master_status_controller_path is defined
+          - dump_restore_key_controller_path is defined
+          - dump_restore_expected_sha256 is match('^[0-9a-fA-F]{64}$')
+          - dump_restore_backup_controller_path | basename is match('^db_backup_[0-9]{8}_[0-9]{4,6}[.]sql[.]gz[.]enc$')
+        fail_msg: Restore is disabled unless the operator explicitly confirms a verified complete backup pair.
+
+    - name: Create protected staging directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - /var/lib/hospital-dr-dump-restore/input
+        - /var/lib/hospital-dr-dump-restore/status
+
+    - name: Copy encrypted dump to isolated staging EBS
+      ansible.builtin.copy:
+        src: "{{ dump_restore_backup_controller_path }}"
+        dest: "/var/lib/hospital-dr-dump-restore/input/{{ dump_restore_backup_controller_path | basename }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Copy matching master-status metadata to isolated staging EBS
+      ansible.builtin.copy:
+        src: "{{ dump_restore_master_status_controller_path }}"
+        dest: "/var/lib/hospital-dr-dump-restore/input/{{ dump_restore_master_status_controller_path | basename }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Restore and validate only on the isolated MySQL instance
+      block:
+        - name: Create a root-only tmpfs directory for the short-lived encryption key
+          ansible.builtin.file:
+            path: /run/hospital-dr-dump-restore
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Copy the encryption key into a short-lived root-only tmpfs file
+          ansible.builtin.copy:
+            src: "{{ dump_restore_key_controller_path }}"
+            dest: /run/hospital-dr-dump-restore/.encryption-key
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+
+        - name: Verify, decrypt, import with schema-scoped auth, and validate table integrity
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ dump_restore_helper_path }}"
+              - restore
+              - --instance-id
+              - "{{ dump_restore_expected_instance_id }}"
+              - --private-ip
+              - "{{ dump_restore_expected_private_ip }}"
+              - --volume-id
+              - "{{ dump_restore_expected_data_volume_id }}"
+              - --stage-volume-id
+              - "{{ dump_restore_expected_stage_volume_id }}"
+              - --backup
+              - "/var/lib/hospital-dr-dump-restore/input/{{ dump_restore_backup_controller_path | basename }}"
+              - --master-status
+              - "/var/lib/hospital-dr-dump-restore/input/{{ dump_restore_master_status_controller_path | basename }}"
+              - --expected-sha256
+              - "{{ dump_restore_expected_sha256 }}"
+              - --request-id
+              - "{{ dump_restore_request_id | default('') }}"
+              - --encryption-key-file
+              - /run/hospital-dr-dump-restore/.encryption-key
+              - --result-path
+              - /var/lib/hospital-dr-dump-restore/status/restore.json
+          register: isolated_dump_restore_result
+
+        - name: Record a bounded, sanitized result marker
+          ansible.builtin.debug:
+            msg: "{{ isolated_dump_restore_result.stdout | default('ISOLATED_DUMP_RESTORE=NO_RESULT') }}"
+      always:
+        - name: Remove the remote encryption-key file after the attempt
+          ansible.builtin.file:
+            path: /run/hospital-dr-dump-restore/.encryption-key
+            state: absent
+          no_log: true

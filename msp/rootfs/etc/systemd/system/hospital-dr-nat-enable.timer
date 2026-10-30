@@ -1,0 +1,10 @@
+[Unit]
+Description=Create Hospital DR NAT Gateway on weekday mornings
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:50:00 Asia/Seoul
+Persistent=false
+Unit=hospital-dr-nat-enable.service
+
+[Install]
+WantedBy=timers.target

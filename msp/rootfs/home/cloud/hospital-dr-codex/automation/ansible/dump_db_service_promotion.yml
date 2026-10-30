@@ -1,0 +1,449 @@
+---
+- name: Validate the promotion inventory before any application is stopped
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Require exactly the approved DR Web, EMR, and isolated DB aliases
+      ansible.builtin.assert:
+        that:
+          - groups['web_servers'] | default([]) == ['dr-web']
+          - groups['doc_servers'] | default([]) == ['dr-doc']
+          - groups['db_servers'] | default([]) == ['dr-db']
+          - groups['isolated_dump_restore'] | default([]) == ['isolated-dump-restore']
+          - dump_db_promotion_id is match('^[0-9a-f-]{36}$')
+          - dump_db_promotion_cutover_id is match('^[0-9a-f-]{36}$')
+          - dump_db_promotion_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_db_promotion_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_db_promotion_private_ip is match('^10[.]20[.]30[.](?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+          - dump_db_promotion_private_ip != 'IP_REDACTED'
+          - dump_db_promotion_private_ip != 'IP_REDACTED'
+          - dump_db_promotion_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_db_promotion_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_db_promotion_data_volume_id != dump_db_promotion_stage_volume_id
+          - dump_db_promotion_service_sg_id is match('^sg-[0-9a-f]{8,32}$')
+          - dump_db_promotion_expected_sha256 is match('^[0-9a-f]{64}$')
+          - dump_db_promotion_port | int == 3307
+          - dump_db_promotion_user == 'hospital_dr_service'
+          - dump_db_promotion_name == 'hospital_db'
+        fail_msg: Write promotion identity or inventory contract is invalid.
+
+- name: Read-only preflight on the isolated DB before stopping applications
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Install the reviewed promotion helper beside its restore verifier
+      ansible.builtin.copy:
+        src: "{{ dump_db_promotion_helper_source }}"
+        dest: /usr/local/sbin/hospital-dr-isolated-db-service
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Require the isolated restore verifier module
+      ansible.builtin.stat:
+        path: /usr/local/sbin/isolated_restore_host.py
+      register: dump_db_promotion_restore_helper
+
+    - name: Refuse an incomplete isolated host toolchain
+      ansible.builtin.assert:
+        that:
+          - dump_db_promotion_restore_helper.stat.exists
+          - dump_db_promotion_restore_helper.stat.isreg
+          - dump_db_promotion_restore_helper.stat.pw_name == 'root'
+          - dump_db_promotion_restore_helper.stat.mode == '0700'
+
+    - name: Confirm restore, EBS identity, read-only MySQL, schema, and service grants before app fencing
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /usr/local/sbin/hospital-dr-isolated-db-service
+          - verify-write-promotion-preconditions
+          - --instance-id
+          - "{{ dump_db_promotion_instance_id }}"
+          - --private-ip
+          - "{{ dump_db_promotion_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_db_promotion_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_db_promotion_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_db_promotion_expected_sha256 }}"
+          - --promotion-id
+          - "{{ dump_db_promotion_id }}"
+          - --request-id
+          - "{{ dump_db_promotion_request_id | default('') }}"
+      register: dump_db_promotion_preflight
+      changed_when: false
+      no_log: true
+      failed_when: >-
+        dump_db_promotion_preflight.rc != 0 or
+        'ISOLATED_DB_WRITE_PROMOTION_PREFLIGHT=PASS state=SERVICE_PREPARED' not in dump_db_promotion_preflight.stdout
+
+- name: Stop and record the exact Web/EMR containers before enabling database writes
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    dump_db_promotion_root: /var/lib/hospital-dr/db-endpoint-cutovers
+    dump_db_promotion_app_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+    dump_db_promotion_container: "{{ 'hospital-dr-web' if dump_db_promotion_app_kind == 'web' else 'hospital-dr-emr' }}"
+    dump_db_promotion_env_file: >-
+      {{ '/etc/hospital-dr/hospital-dr-web.env' if dump_db_promotion_app_kind == 'web'
+         else '/etc/hospital-dr/hospital-dr-emr.env' }}
+    dump_db_promotion_expected_source_ip: "{{ 'IP_REDACTED' if dump_db_promotion_app_kind == 'web' else 'IP_REDACTED' }}"
+    dump_db_promotion_health_url: >-
+      {{ 'http://IP_REDACTED:3000/health' if dump_db_promotion_app_kind == 'web'
+         else 'http://IP_REDACTED:3000/api/patients' }}
+    dump_db_promotion_receipt_dir: "{{ dump_db_promotion_root }}/{{ dump_db_promotion_cutover_id }}"
+  tasks:
+    - name: Confirm the legacy PM2 app service is not active
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - pm2-ubuntu.service
+      register: dump_db_promotion_pm2_service
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse promotion while a legacy app service can run outside Docker
+      ansible.builtin.assert:
+        that:
+          - dump_db_promotion_pm2_service.stdout | trim in ['inactive', 'failed', 'unknown']
+        fail_msg: Legacy PM2 app service is active or its state cannot be verified.
+
+    - name: Confirm no legacy PM2 Web/EMR process is running
+      ansible.builtin.shell: |
+        set -o pipefail
+        if ! command -v pm2 >/dev/null 2>&1; then
+          echo PM2_APP_PROCESSES=NONE
+          exit 0
+        fi
+        pm2 jlist | python3 -c '
+        import json, sys
+        try:
+            rows = json.load(sys.stdin)
+        except Exception:
+            raise SystemExit(2)
+        blocked = {"hospital-web", "hospital-emr"}
+        active = [row for row in rows if row.get("name") in blocked and
+                  row.get("pm2_env", {}).get("status") == "online"]
+        if active:
+            raise SystemExit(3)
+        print("PM2_APP_PROCESSES=NONE")
+        '
+      args:
+        executable: /bin/bash
+      become_user: ubuntu
+      register: dump_db_promotion_pm2_processes
+      changed_when: false
+      no_log: true
+
+    - name: Require no live legacy PM2 application process
+      ansible.builtin.assert:
+        that:
+          - dump_db_promotion_pm2_processes.rc == 0
+        fail_msg: Legacy PM2 Web/EMR process remains active or could not be inspected.
+      no_log: true
+
+    - name: Validate the app's protected DB env without displaying credentials
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import sys
+            from pathlib import Path
+            path = Path(sys.argv[1])
+            expected = {
+                'DB_HOST': sys.argv[2],
+                'DB_PORT': '3307',
+                'DB_USER': 'hospital_dr_service',
+                'DB_NAME': 'hospital_db',
+            }
+            lines = path.read_text(encoding='utf-8').splitlines()
+            values = {}
+            for key in ('DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'):
+                found = [line[len(key) + 1:] for line in lines if line.startswith(key + '=')]
+                if len(found) != 1 or not found[0]:
+                    raise SystemExit(2)
+                values[key] = found[0]
+            if any(values[key] != value for key, value in expected.items()):
+                raise SystemExit(3)
+            print('DB_APP_CONFIG=PASS')
+          - "{{ dump_db_promotion_env_file }}"
+          - "{{ dump_db_promotion_private_ip }}"
+      register: dump_db_promotion_env_check
+      changed_when: false
+      no_log: true
+
+    - name: Require the exact cutover snapshot and safe current container metadata
+      block:
+        - name: Inspect the cutover backup directory
+          ansible.builtin.stat:
+            path: "{{ dump_db_promotion_receipt_dir }}/container.json"
+            follow: false
+          register: dump_db_promotion_cutover_metadata_stat
+
+        - name: Inspect the protected pre-cutover DB configuration snapshot
+          ansible.builtin.stat:
+            path: "{{ dump_db_promotion_receipt_dir }}/app.env.before"
+            follow: false
+          register: dump_db_promotion_env_snapshot_stat
+
+        - name: Require a root-only cutover record for this exact operation
+          ansible.builtin.assert:
+            that:
+              - dump_db_promotion_cutover_metadata_stat.stat.exists
+              - dump_db_promotion_cutover_metadata_stat.stat.isreg
+              - not dump_db_promotion_cutover_metadata_stat.stat.islnk
+              - dump_db_promotion_cutover_metadata_stat.stat.pw_name == 'root'
+              - dump_db_promotion_cutover_metadata_stat.stat.mode == '0600'
+              - dump_db_promotion_env_snapshot_stat.stat.exists
+              - dump_db_promotion_env_snapshot_stat.stat.isreg
+              - not dump_db_promotion_env_snapshot_stat.stat.islnk
+              - dump_db_promotion_env_snapshot_stat.stat.pw_name == 'root'
+              - dump_db_promotion_env_snapshot_stat.stat.mode == '0600'
+
+        - name: Verify the exact saved DB endpoint and rollback container without printing the snapshot
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -c
+              - |
+                import json, sys
+                from pathlib import Path
+                root, kind, cutover_id = sys.argv[1:]
+                directory = Path(root) / cutover_id
+                metadata = json.loads((directory / 'container.json').read_text(encoding='utf-8'))
+                env = {}
+                for line in (directory / 'app.env.before').read_text(encoding='utf-8').splitlines():
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        env[key] = value
+                expected_container = 'hospital-dr-web' if kind == 'web' else 'hospital-dr-emr'
+                rollback = expected_container + '-dbcutover-' + cutover_id.replace('-', '')
+                if (metadata.get('container') != expected_container or
+                    metadata.get('rollback_container') != rollback or
+                    metadata.get('was_running') is not True or
+                    not isinstance(metadata.get('container_id'), str) or
+                    len(metadata['container_id']) != 64 or
+                    not isinstance(metadata.get('image_id'), str) or
+                    not metadata['image_id'].startswith('sha256:') or
+                    env.get('DB_HOST') != 'IP_REDACTED' or
+                    env.get('DB_PORT') != '3306' or
+                    env.get('DB_NAME') != 'hospital_db'):
+                    raise SystemExit(2)
+                print('DB_CUTOVER_SNAPSHOT=PASS')
+              - "{{ dump_db_promotion_root }}"
+              - "{{ dump_db_promotion_app_kind }}"
+              - "{{ dump_db_promotion_cutover_id }}"
+          register: dump_db_promotion_snapshot_contract
+          changed_when: false
+          no_log: true
+
+        - name: Inspect the current app container without exposing its environment
+          ansible.builtin.command:
+            argv:
+              - docker
+              - inspect
+              - --format
+              - "{% raw %}{{.Id}}|{{.State.Running}}|{{.State.Health.Status}}|{{index .Config.Labels \"hospital-dr.db-cutover-id\"}}{% endraw %}"
+              - "{{ dump_db_promotion_container }}"
+          register: dump_db_promotion_container_info
+          changed_when: false
+          no_log: true
+
+        - name: Require running healthy app with the matching isolated DB cutover label
+          ansible.builtin.assert:
+            that:
+              - dump_db_promotion_env_check.rc == 0
+              - dump_db_promotion_snapshot_contract.rc == 0
+              - dump_db_promotion_container_info.stdout.split('|') | length == 4
+              - dump_db_promotion_container_info.stdout.split('|')[0] is match('^[0-9a-f]{64}$')
+              - dump_db_promotion_container_info.stdout.split('|')[1] == 'true'
+              - dump_db_promotion_container_info.stdout.split('|')[2] == 'healthy'
+              - dump_db_promotion_container_info.stdout.split('|')[3] == dump_db_promotion_cutover_id
+            fail_msg: App is not connected to the verified isolated DB or is not healthy.
+          no_log: true
+
+    - name: Recheck app DB connectivity using its existing read-only health route
+      ansible.builtin.uri:
+        url: "{{ dump_db_promotion_health_url }}"
+        method: GET
+        status_code: 200
+        timeout: 10
+        return_content: false
+      register: dump_db_promotion_health
+      no_log: true
+
+    - name: Stop the app container before the DB becomes writable
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stop
+          - --time
+          - "10"
+          - "{{ dump_db_promotion_container }}"
+      register: dump_db_promotion_stop
+      changed_when: true
+      no_log: true
+
+    - name: Verify the app process is stopped and remains bound to the same cutover
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{% raw %}{{.Id}}|{{.State.Running}}|{{index .Config.Labels \"hospital-dr.db-cutover-id\"}}{% endraw %}"
+          - "{{ dump_db_promotion_container }}"
+      register: dump_db_promotion_stopped_info
+      changed_when: false
+      no_log: true
+
+    - name: Refuse write promotion unless the container stop is confirmed
+      ansible.builtin.assert:
+        that:
+          - dump_db_promotion_stopped_info.stdout.split('|') | length == 3
+          - dump_db_promotion_stopped_info.stdout.split('|')[0] == dump_db_promotion_container_info.stdout.split('|')[0]
+          - dump_db_promotion_stopped_info.stdout.split('|')[1] == 'false'
+          - dump_db_promotion_stopped_info.stdout.split('|')[2] == dump_db_promotion_cutover_id
+        fail_msg: App stop could not be verified; isolated DB must remain read-only.
+      no_log: true
+
+    - name: Verify no host-level application listener remains after container stop
+      ansible.builtin.command:
+        argv:
+          - ss
+          - -ltnH
+          - "sport = :3000"
+      register: dump_db_promotion_host_listener
+      changed_when: false
+
+    - name: Refuse promotion while a host-level Web/EMR process can accept traffic
+      ansible.builtin.assert:
+        that:
+          - dump_db_promotion_host_listener.stdout | trim == ''
+        fail_msg: A host-level app process still listens on port 3000 after Docker stop.
+
+    - name: Record safe non-secret app fence facts for the isolated DB controller
+      ansible.builtin.set_fact:
+        dump_db_promotion_app_fence:
+          host: "{{ inventory_hostname }}"
+          source_ip: "{{ dump_db_promotion_expected_source_ip }}"
+          container_id: "{{ dump_db_promotion_stopped_info.stdout.split('|')[0] }}"
+          cutover_id: "{{ dump_db_promotion_cutover_id }}"
+          db_host: "{{ dump_db_promotion_private_ip }}"
+          db_port: 3307
+          db_user: hospital_dr_service
+          db_name: hospital_db
+          health_probe: PASS
+          stopped: true
+      no_log: true
+
+    - name: Record the stopped-container receipt on the app host
+      ansible.builtin.copy:
+        dest: "{{ dump_db_promotion_receipt_dir }}/write-fence-{{ dump_db_promotion_id }}.json"
+        content: "{{ hostvars[inventory_hostname].dump_db_promotion_app_fence | to_json }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+- name: Enable isolated DB writes only after both application write paths are fenced
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_db_promotion_status_root: /var/lib/hospital-dr-dump-restore/status/promotions
+  tasks:
+    - name: Require both exact stopped app fence records from the preceding play
+      ansible.builtin.assert:
+        that:
+          - hostvars['dr-web'].dump_db_promotion_app_fence.stopped | default(false) | bool
+          - hostvars['dr-doc'].dump_db_promotion_app_fence.stopped | default(false) | bool
+          - hostvars['dr-web'].dump_db_promotion_app_fence.health_probe | default('') == 'PASS'
+          - hostvars['dr-doc'].dump_db_promotion_app_fence.health_probe | default('') == 'PASS'
+          - hostvars['dr-web'].dump_db_promotion_app_fence.db_host | default('') == dump_db_promotion_private_ip
+          - hostvars['dr-doc'].dump_db_promotion_app_fence.db_host | default('') == dump_db_promotion_private_ip
+          - hostvars['dr-web'].dump_db_promotion_app_fence.cutover_id | default('') == dump_db_promotion_cutover_id
+          - hostvars['dr-doc'].dump_db_promotion_app_fence.cutover_id | default('') == dump_db_promotion_cutover_id
+        fail_msg: Both Web and EMR must be proven stopped before MySQL write promotion.
+
+    - name: Create the root-only promotion receipt directory
+      ansible.builtin.file:
+        path: "{{ dump_db_promotion_status_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Refuse reuse of an existing app-fence receipt
+      ansible.builtin.stat:
+        path: "{{ dump_db_promotion_app_fence_path }}"
+        follow: false
+      register: dump_db_promotion_app_fence_stat
+
+    - name: Require a new immutable promotion attempt
+      ansible.builtin.assert:
+        that: not dump_db_promotion_app_fence_stat.stat.exists
+        fail_msg: Promotion ID already has an app fence record; do not replay it.
+
+    - name: Persist non-secret proof that both app containers are stopped
+      ansible.builtin.copy:
+        dest: "{{ dump_db_promotion_app_fence_path }}"
+        content: >-
+          {{ {
+            'status': 'APPS_FENCED',
+            'promotion_id': dump_db_promotion_id,
+            'cutover_id': dump_db_promotion_cutover_id,
+            'completed_at_utc': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'),
+            'apps': {
+              'web': dict(hostvars['dr-web'].dump_db_promotion_app_fence, host='dr-web'),
+              'emr': dict(hostvars['dr-doc'].dump_db_promotion_app_fence, host='dr-doc')
+            }
+          } | to_json }}
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Verify exact isolated target and promote MySQL while service accounts stay locked
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /usr/local/sbin/hospital-dr-isolated-db-service
+          - promote-service-write-fenced
+          - --instance-id
+          - "{{ dump_db_promotion_instance_id }}"
+          - --private-ip
+          - "{{ dump_db_promotion_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_db_promotion_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_db_promotion_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_db_promotion_expected_sha256 }}"
+          - --promotion-id
+          - "{{ dump_db_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_db_promotion_cutover_id }}"
+          - --app-fence-receipt
+          - "{{ dump_db_promotion_app_fence_path }}"
+      register: dump_db_promotion_result
+      changed_when: true
+      no_log: true
+      failed_when: >-
+        dump_db_promotion_result.rc != 0 or
+        'ISOLATED_DB_SERVICE_PROMOTION=SUCCESS state=WRITE_PROMOTED_APPS_FENCED' not in dump_db_promotion_result.stdout
+
+    - name: Emit a non-secret final promotion result
+      ansible.builtin.debug:
+        msg: >-
+          ISOLATED_DB_SERVICE_PROMOTION=SUCCESS state=WRITE_PROMOTED_APPS_FENCED
+          db_writable=true apps_stopped=true service_accounts_locked=true
+          application_writes_allowed=false dns_authorized=false

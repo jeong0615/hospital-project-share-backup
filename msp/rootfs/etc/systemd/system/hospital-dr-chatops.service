@@ -1,0 +1,34 @@
+[Unit]
+Description=Hospital DR ChatOps approval service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloud
+WorkingDirectory=/home/cloud/dr_project
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=DR_SECRET_FILE=/home/cloud/hospital-dr-secrets/dr.env
+Environment=DR_STATE_DIR=/var/lib/hospital-dr
+Environment=DR_REPO_ROOT=/home/cloud/hospital-dr-codex
+Environment=DR_SCRIPT_ROOT=/home/cloud/hospital-dr-codex/infra/terraform
+Environment=DR_TERRAFORM_DIR=/home/cloud/hospital-dr-terraform
+Environment=DR_ANSIBLE_DIR=/home/cloud/hospital-dr-ansible
+Environment=DR_ANSIBLE_SOURCE_DIR=/home/cloud/hospital-dr-codex/automation/ansible
+Environment=DR_LOG_DIR=/home/cloud/hospital-dr-terraform
+# Reuse the existing external Zabbix API env when the MSP deployment provides
+# it; values remain outside this repository and are read-only for this gate.
+Environment=NETWORK_DR_HEALTH_ZABBIX_ENV_FILE=/home/cloud/hospital-dr-ansible/roles/web_deploy/files/.env
+StateDirectory=hospital-dr
+StateDirectoryMode=0750
+Environment=CHATOPS_STATE_DB=/var/lib/hospital-dr/chatops_state.sqlite3
+Environment=CHATOPS_EXECUTION_LOCK_FILE=/var/lib/hospital-dr/chatops.pipeline.lock
+ExecStart=/usr/bin/python3 -m gunicorn --chdir /home/cloud/dr_project --bind IP_REDACTED:5000 --workers 1 --threads 4 --timeout 120 --graceful-timeout 30 --error-logfile - wsgi:app
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

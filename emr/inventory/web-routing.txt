@@ -1,0 +1,10 @@
+Effective Nginx routing observed:
+listen 80 default_server;
+listen [::]:80 default_server;
+server_name _;
+root /var/www/html;
+try_files $uri $uri/ =404;
+
+No proxy_pass directive was active in the default server configuration.
+The backed-up hospital_emr source is under /home/hoseo/hospital_emr and its Node process is currently listening on port 5000, but Nginx still serves `/var/www/html` directly rather than proxying to it.
+Apache's default virtual host was enabled, but apache2.service was failed because the host already uses port 80 through Nginx.

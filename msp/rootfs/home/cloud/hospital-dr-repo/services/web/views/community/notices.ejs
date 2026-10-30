@@ -1,0 +1,13 @@
+<%- include('../partials/header') %>
+<div class="content-card">
+  <h1><%= title %></h1>
+  <ul>
+    <% items.forEach(item => { %>
+      <li style="padding:12px 0;border-bottom:1px solid #e6edf5;display:flex;justify-content:space-between;gap:12px;">
+        <span><%= item.title %></span>
+        <em><%= item.date %></em>
+      </li>
+    <% }) %>
+  </ul>
+</div>
+<%- include('../partials/footer') %>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>병원 웹포털</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/menu.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container topbar">
+    <h1 class="logo"><a href="/">병원 웹포털</a></h1>
+    <div class="top-links">
+      <% if (currentUser) { %>
+        <span><%= currentUser.display_name %>님</span>
+        <form class="inline-form" method="post" action="/logout">
+          <button class="link-button" type="submit">로그아웃</button>
+        </form>
+      <% } else { %>
+        <a href="/login">로그인</a>
+        <a href="/signup">회원가입</a>
+      <% } %>
+    </div>
+  </div>
+  <div class="mainnav-wrap">
+    <div class="container mainnav">
+      <div class="menu-icon">☰</div>
+      <nav>
+        <button class="menu-toggle" type="button" data-mobile-menu>메뉴 열기</button>
+        <div class="menu-group">
+          <div class="menu-item">
+            <a href="/guide/medical">진료안내</a>
+            <div class="dropdown">
+              <% menuData.medical.forEach(item => { %>
+                <a href="<%= item.url %>"><%= item.label %></a>
+              <% }) %>
+            </div>
+          </div>
+          <div class="menu-item">
+            <a href="/guide/usage">이용안내</a>
+            <div class="dropdown">
+              <% menuData.usage.forEach(item => { %>
+                <a href="<%= item.url %>"><%= item.label %></a>
+              <% }) %>
+            </div>
+          </div>
+          <div class="menu-item">
+            <a href="/health-info">건강정보</a>
+            <div class="dropdown">
+              <% menuData.health.forEach(item => { %>
+                <a href="<%= item.url %>"><%= item.label %></a>
+              <% }) %>
+            </div>
+          </div>
+          <div class="menu-item">
+            <a href="/community">고객참여</a>
+            <div class="dropdown">
+              <% menuData.community.forEach(item => { %>
+                <a href="<%= item.url %>"><%= item.label %></a>
+              <% }) %>
+            </div>
+          </div>
+          <div class="menu-item">
+            <a href="/guide/about">병원소개</a>
+            <div class="dropdown">
+              <% menuData.about.forEach(item => { %>
+                <a href="<%= item.url %>"><%= item.label %></a>
+              <% }) %>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+    </div>
+  </div>
+</header>
+<main class="page-body">
+  <div class="container">

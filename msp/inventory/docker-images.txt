@@ -1,0 +1,2 @@
+# docker images (repository, tag, id only)
+# command unavailable or failed on this host

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMR System — Login</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+.login-page { animation: fadeIn .4s ease; }
+@keyframes fadeIn { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform:none; } }
+.login-box { animation: slideUp .4s ease .1s both; }
+@keyframes slideUp { from { opacity:0; transform: translateY(16px); } to { opacity:1; transform:none; } }
+.pulse-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  margin-right: 6px;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+.role-tabs { display: flex; gap: 6px; margin-bottom: 22px; }
+.role-tab {
+  flex: 1;
+  padding: 7px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+  cursor: pointer;
+  transition: all .15s;
+  text-align: center;
+}
+.role-tab:hover { border-color: var(--border-lit); color: var(--text-2); }
+.role-tab.active { background: var(--accent-glow); border-color: rgba(45,124,246,.4); color: var(--accent); }
+.login-footer { margin-top: 28px; text-align: center; font-size: 11px; color: var(--text-3); }
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(45,124,246,.08);
+  border: 1px solid rgba(45,124,246,.15);
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 8px;
+}
+.error-msg {
+  display: none;
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.error-msg.show { display: block; }
+</style>
+</head>
+<body>
+<div class="login-page">
+  <div class="login-bg"></div>
+  <div class="login-box">
+    <div class="login-header">
+      <div class="login-mark">
+        <span class="pulse-dot"></span>Hospital EMR v2.4
+      </div>
+      <div class="login-title">전자의무기록 시스템</div>
+      <div class="login-sub">인증된 의료진만 접속 가능합니다</div>
+    </div>
+
+    <div class="role-tabs">
+      <button class="role-tab active" onclick="selectRole(this,'DOC')">DOC</button>
+      <button class="role-tab" onclick="selectRole(this,'PA')">PA</button>
+      <button class="role-tab" onclick="selectRole(this,'ADMIN')">ADMIN</button>
+    </div>
+
+    <form onsubmit="handleLogin(event)">
+      <div class="form-group mb-16">
+        <label class="form-label">아이디 <span class="req">*</span></label>
+        <input id="loginId" class="form-control" type="text" placeholder="로그인 ID 입력" autocomplete="username">
+      </div>
+      <div class="form-group mb-20">
+        <label class="form-label">비밀번호 <span class="req">*</span></label>
+        <input id="loginPw" class="form-control" type="password" placeholder="비밀번호 입력" autocomplete="current-password">
+        <span id="errMsg" class="error-msg">아이디 또는 비밀번호를 확인해주세요.</span>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; padding:11px;">
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+        로그인
+      </button>
+    </form>
+
+    <div class="login-footer">
+      <div>접속 이력은 보안 감사 목적으로 기록됩니다</div>
+      <div class="version-badge">EMR-SYS · BUILD 2024.12</div>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/auth.js"></script>
+</body>
+</html>

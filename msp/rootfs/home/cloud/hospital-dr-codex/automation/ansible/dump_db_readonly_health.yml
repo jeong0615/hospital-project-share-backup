@@ -1,0 +1,702 @@
+---
+- name: Validate the exact Dump read-only health target and operation identity
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse ambiguous or production targets and unsupported phases
+      ansible.builtin.assert:
+        that:
+          - groups['web_servers'] | default([]) == ['dr-web']
+          - groups['doc_servers'] | default([]) == ['dr-doc']
+          - groups['db_servers'] | default([]) == ['dr-db']
+          - groups['isolated_dump_restore'] | default([]) == ['isolated-dump-restore']
+          - dump_readonly_health_phase in ['prepare', 'activate', 'rollback-apps', 'rollback-db']
+          - dump_readonly_health_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_readonly_health_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_readonly_health_private_ip is match('^10[.]20[.]30[.](?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+          - dump_readonly_health_private_ip not in ['IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED']
+          - dump_readonly_health_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_readonly_health_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_readonly_health_data_volume_id != dump_readonly_health_stage_volume_id
+          - dump_readonly_health_service_sg_id is match('^sg-[0-9a-f]{8,32}$')
+          - dump_readonly_health_expected_sha256 is match('^[0-9a-f]{64}$')
+          - dump_readonly_health_backup_id is match('^db_backup_[0-9]{8}_[0-9]{4,6}[.]sql[.]gz[.]enc$')
+          - dump_readonly_health_promotion_id is match('^[0-9a-f-]{36}$')
+          - dump_readonly_health_cutover_id is match('^[0-9a-f-]{36}$')
+        fail_msg: Dump read-only Health Gate target or operation contract is invalid.
+
+    - name: Verify the local read-only DB probe source expected by the operation
+      ansible.builtin.assert:
+        that:
+          - "(lookup('file', playbook_dir ~ '/../../operations/db/dump_db_readonly_app_probe.js') | hash('sha256')) == dump_readonly_health_app_js_sha256"
+        fail_msg: The app DB probe differs from the controller-approved source.
+
+- name: Install and verify the persistent external traffic fence before activation
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: "{{ dump_readonly_health_phase != 'rollback-apps' }}"
+  vars:
+    dump_readonly_health_app_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+    dump_readonly_health_app_container: "{{ 'hospital-dr-web' if dump_readonly_health_app_kind == 'web' else 'hospital-dr-emr' }}"
+    dump_readonly_health_fence_path: /usr/local/sbin/hospital-dr-dump-external-fence
+    dump_readonly_health_probe_path: /usr/local/sbin/hospital-dr-dump-app-fence-probe
+    dump_readonly_health_unit_path: /etc/systemd/system/hospital-dr-dump-readonly-fence.service
+  tasks:
+    - name: Inspect the cutover container before applying any host change
+      ansible.builtin.script:
+        cmd: >-
+          {{ playbook_dir }}/../../operations/db/dump_db_app_fence_probe.py
+          --kind {{ dump_readonly_health_app_kind }}
+          --cutover-id {{ dump_readonly_health_cutover_id }}
+          --isolated-private-ip {{ dump_readonly_health_private_ip }}
+        executable: python3
+      register: dump_readonly_health_stopped_probe
+      changed_when: false
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Require the exact previously fenced, stopped app container
+      ansible.builtin.assert:
+        that:
+          - (dump_readonly_health_stopped_probe.stdout | from_json).stopped | bool
+          - (dump_readonly_health_stopped_probe.stdout | from_json).listener_absent | bool
+          - (dump_readonly_health_stopped_probe.stdout | from_json).cutover_id == dump_readonly_health_cutover_id
+          - (dump_readonly_health_stopped_probe.stdout | from_json).db_host == dump_readonly_health_private_ip
+          - (dump_readonly_health_stopped_probe.stdout | from_json).db_port | int == 3307
+        fail_msg: The app is not in the verified stopped Dump-cutover state.
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Install the dedicated nftables fence and active-state verifier
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - src: "{{ playbook_dir }}/../../operations/db/dump_db_external_fence.py"
+          dest: "{{ dump_readonly_health_fence_path }}"
+          mode: "0750"
+        - src: "{{ playbook_dir }}/../../operations/db/dump_db_app_fence_probe.py"
+          dest: "{{ dump_readonly_health_probe_path }}"
+          mode: "0750"
+        - src: "{{ playbook_dir }}/../../operations/db/systemd/hospital-dr-dump-readonly-fence.service"
+          dest: "{{ dump_readonly_health_unit_path }}"
+          mode: "0644"
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Reload and persist the host ingress fence before any app can start
+      ansible.builtin.systemd:
+        daemon_reload: true
+        name: hospital-dr-dump-readonly-fence.service
+        enabled: true
+        state: started
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Verify exact installed fence, host probe, and systemd unit checksums
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop:
+        - path: "{{ dump_readonly_health_fence_path }}"
+          expected: "{{ dump_readonly_health_external_fence_sha256 }}"
+        - path: "{{ dump_readonly_health_probe_path }}"
+          expected: "{{ dump_readonly_health_app_probe_sha256 }}"
+        - path: "{{ dump_readonly_health_unit_path }}"
+          expected: "{{ dump_readonly_health_fence_unit_sha256 }}"
+      register: dump_readonly_health_app_helper_stats
+      changed_when: false
+      when: dump_readonly_health_phase in ['prepare', 'activate']
+
+    - name: Require exact root-owned app fence artifacts
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.checksum == item.item.expected
+        fail_msg: An app fence artifact differs from the reviewed source.
+      loop: "{{ dump_readonly_health_app_helper_stats.results }}"
+      no_log: true
+      when: dump_readonly_health_phase in ['prepare', 'activate']
+
+    - name: Verify the firewall contract without changing it
+      ansible.builtin.command:
+        argv:
+          - "{{ dump_readonly_health_fence_path }}"
+          - verify
+      register: dump_readonly_health_fence_verify
+      changed_when: false
+      when: dump_readonly_health_phase in ['prepare', 'activate']
+
+    - name: Require non-loopback HTTP and HTTPS ingress to remain dropped
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_fence_verify.rc == 0
+          - "'DUMP_READONLY_EXTERNAL_FENCE=PASS ports=80,443 interface=non-loopback' in dump_readonly_health_fence_verify.stdout"
+        fail_msg: External HTTP(S) ingress fence is unavailable or differs from the reviewed policy.
+      when: dump_readonly_health_phase in ['prepare', 'activate']
+
+    - name: Change only the exact stopped app container restart policy to no
+      ansible.builtin.command:
+        argv:
+          - docker
+          - update
+          - --restart=no
+          - "{{ dump_readonly_health_app_container }}"
+      register: dump_readonly_health_restart_update
+      changed_when: true
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Verify the container remains stopped and will not auto-start after reboot
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{% raw %}{{.State.Running}}|{{index .Config.Labels \"hospital-dr.db-cutover-id\"}}|{{.HostConfig.RestartPolicy.Name}}|{{json .HostConfig.PortBindings}}{% endraw %}"
+          - "{{ dump_readonly_health_app_container }}"
+      register: dump_readonly_health_prepared_container
+      changed_when: false
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Assert container identity, stopped state, no-restart policy, and loopback-only port
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_prepared_container.stdout.split('|') | length == 4
+          - dump_readonly_health_prepared_container.stdout.split('|')[0] == 'false'
+          - dump_readonly_health_prepared_container.stdout.split('|')[1] == dump_readonly_health_cutover_id
+          - dump_readonly_health_prepared_container.stdout.split('|')[2] == 'no'
+          - (dump_readonly_health_prepared_container.stdout.split('|')[3] | from_json)['3000/tcp'][0]['HostIp'] == 'IP_REDACTED'
+          - (dump_readonly_health_prepared_container.stdout.split('|')[3] | from_json)['3000/tcp'][0]['HostPort'] == '3000'
+        fail_msg: App container identity or protected restart/port settings changed.
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Roll back only the container carrying this cutover identity
+      when: dump_readonly_health_phase == 'rollback-apps'
+      block:
+        - name: Inspect current candidate container without exposing its environment
+          ansible.builtin.command:
+            argv:
+              - docker
+              - inspect
+              - --format
+              - "{% raw %}{{.State.Running}}|{{index .Config.Labels \"hospital-dr.db-cutover-id\"}}|{{.HostConfig.RestartPolicy.Name}}{% endraw %}"
+              - "{{ dump_readonly_health_app_container }}"
+          register: dump_readonly_health_rollback_inspect
+          changed_when: false
+          failed_when: false
+          no_log: true
+
+        - name: Record whether this exact container belongs to the requested cutover
+          ansible.builtin.set_fact:
+            dump_readonly_health_rollback_owned: >-
+              {{ dump_readonly_health_rollback_inspect.rc == 0 and
+                 dump_readonly_health_rollback_inspect.stdout.split('|') | length == 3 and
+                 dump_readonly_health_rollback_inspect.stdout.split('|')[1] == dump_readonly_health_cutover_id }}
+          no_log: true
+
+        - name: Stop the exact candidate app container
+          ansible.builtin.command:
+            argv: [docker, stop, "{{ dump_readonly_health_app_container }}"]
+          when: dump_readonly_health_rollback_owned and dump_readonly_health_rollback_inspect.stdout.split('|')[0] == 'true'
+          changed_when: true
+          failed_when: false
+          no_log: true
+
+        - name: Ensure candidate app cannot restart automatically
+          ansible.builtin.command:
+            argv: [docker, update, --restart=no, "{{ dump_readonly_health_app_container }}"]
+          when: dump_readonly_health_rollback_owned
+          changed_when: true
+          failed_when: false
+          no_log: true
+
+        - name: Reinstall the known fence artifacts as a best-effort rollback safeguard
+          ansible.builtin.copy:
+            src: "{{ item.src }}"
+            dest: "{{ item.dest }}"
+            owner: root
+            group: root
+            mode: "{{ item.mode }}"
+          loop:
+            - src: "{{ playbook_dir }}/../../operations/db/dump_db_external_fence.py"
+              dest: "{{ dump_readonly_health_fence_path }}"
+              mode: "0750"
+            - src: "{{ playbook_dir }}/../../operations/db/dump_db_app_fence_probe.py"
+              dest: "{{ dump_readonly_health_probe_path }}"
+              mode: "0750"
+            - src: "{{ playbook_dir }}/../../operations/db/systemd/hospital-dr-dump-readonly-fence.service"
+              dest: "{{ dump_readonly_health_unit_path }}"
+              mode: "0644"
+          failed_when: false
+          ignore_errors: true
+
+        - name: Best-effort enable and start the external ingress fence after stop attempt
+          ansible.builtin.systemd:
+            daemon_reload: true
+            name: hospital-dr-dump-readonly-fence.service
+            enabled: true
+            state: started
+          register: dump_readonly_health_rollback_fence_service
+          failed_when: false
+          ignore_errors: true
+
+        - name: Verify rollback container is stopped and ingress remains fenced
+          ansible.builtin.command:
+            argv:
+              - docker
+              - inspect
+              - --format
+              - "{% raw %}{{.State.Running}}|{{index .Config.Labels \"hospital-dr.db-cutover-id\"}}|{{.HostConfig.RestartPolicy.Name}}{% endraw %}"
+              - "{{ dump_readonly_health_app_container }}"
+          register: dump_readonly_health_rollback_verified
+          changed_when: false
+          failed_when: false
+          no_log: true
+
+        - name: Verify firewall state after best-effort reinstallation
+          ansible.builtin.command:
+            argv: ["{{ dump_readonly_health_fence_path }}", verify]
+          register: dump_readonly_health_rollback_fence_verify
+          changed_when: false
+          failed_when: false
+
+        - name: Assert rollback left only this app stopped behind the persistent fence
+          ansible.builtin.assert:
+            that:
+              - dump_readonly_health_rollback_owned | bool
+              - dump_readonly_health_rollback_verified.rc == 0
+              - dump_readonly_health_rollback_verified.stdout.split('|') == ['false', dump_readonly_health_cutover_id, 'no']
+              - dump_readonly_health_rollback_fence_verify.rc == 0
+            fail_msg: App rollback or external traffic fence could not be verified.
+          no_log: true
+
+- name: Install the DB-side read-only Health Gate verifier
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_readonly_health_lib: /usr/local/lib/hospital-dr-dump-readonly-health
+    dump_readonly_health_host_cli: "{{ dump_readonly_health_lib }}/dump_db_readonly_health_host.py"
+  tasks:
+    - name: Install reviewed DB helper modules in a dedicated importable directory
+      ansible.builtin.file:
+        path: "{{ dump_readonly_health_lib }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: dump_readonly_health_phase in ['prepare', 'activate', 'rollback-db']
+
+    - name: Copy exact read-only health verifier modules without secrets
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - src: "{{ playbook_dir }}/../../operations/db/dump_db_readonly_health_host.py"
+          dest: "{{ dump_readonly_health_lib }}/dump_db_readonly_health_host.py"
+        - src: "{{ playbook_dir }}/../../operations/db/isolated_db_service_host.py"
+          dest: "{{ dump_readonly_health_lib }}/isolated_db_service_host.py"
+        - src: "{{ playbook_dir }}/../../operations/db/isolated_restore_host.py"
+          dest: "{{ dump_readonly_health_lib }}/isolated_restore_host.py"
+      when: dump_readonly_health_phase in ['prepare', 'activate', 'rollback-db']
+
+    - name: Verify installed helper checksums before execution
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop:
+        - path: "{{ dump_readonly_health_lib }}/dump_db_readonly_health_host.py"
+          expected: "{{ dump_readonly_health_helper_sha256 }}"
+        - path: "{{ dump_readonly_health_lib }}/isolated_db_service_host.py"
+          expected: "{{ dump_readonly_health_service_helper_sha256 }}"
+        - path: "{{ dump_readonly_health_lib }}/isolated_restore_host.py"
+          expected: "{{ dump_readonly_health_restore_helper_sha256 }}"
+      register: dump_readonly_health_db_helper_stats
+      changed_when: false
+      when: dump_readonly_health_phase in ['prepare', 'activate', 'rollback-db']
+
+    - name: Require exact root-owned DB helper versions
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == '0644'
+          - item.stat.checksum == item.item.expected
+        fail_msg: A DB read-only Health Gate helper is missing or differs from the reviewed source.
+      loop: "{{ dump_readonly_health_db_helper_stats.results }}"
+      no_log: true
+      when: dump_readonly_health_phase in ['prepare', 'activate', 'rollback-db']
+
+    - name: Revalidate all exact DB receipts and locked accounts before preparation
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_readonly_health_lib }}/dump_db_readonly_health_host.py"
+          - preflight
+          - --instance-id
+          - "{{ dump_readonly_health_instance_id }}"
+          - --private-ip
+          - "{{ dump_readonly_health_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_readonly_health_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_readonly_health_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_readonly_health_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_readonly_health_backup_id }}"
+          - --promotion-id
+          - "{{ dump_readonly_health_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_readonly_health_cutover_id }}"
+      register: dump_readonly_health_db_preflight
+      changed_when: false
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Parse isolated database identity from fresh locked-state verification
+      ansible.builtin.set_fact:
+        dump_readonly_health_db_identity: "{{ (dump_readonly_health_db_preflight.stdout | from_json).db_identity }}"
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Confirm DB host and volume identity match the controller request
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_db_identity.hostname is defined
+          - dump_readonly_health_db_identity.server_uuid is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          - dump_readonly_health_db_identity.port | int == 3307
+          - dump_readonly_health_db_identity.datadir == '/var/lib/mysql'
+        fail_msg: Fresh DB identity differs from the expected isolated service database.
+      no_log: true
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Unlock only the SELECT-only app accounts after the fence is ready
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_readonly_health_lib }}/dump_db_readonly_health_host.py"
+          - unlock-readonly-health
+          - --instance-id
+          - "{{ dump_readonly_health_instance_id }}"
+          - --private-ip
+          - "{{ dump_readonly_health_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_readonly_health_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_readonly_health_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_readonly_health_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_readonly_health_backup_id }}"
+          - --promotion-id
+          - "{{ dump_readonly_health_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_readonly_health_cutover_id }}"
+      register: dump_readonly_health_db_unlock
+      changed_when: true
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Parse verified isolated database UUID for app-side identity probes
+      ansible.builtin.set_fact:
+        dump_readonly_health_db_identity: "{{ (dump_readonly_health_db_unlock.stdout | from_json).db_identity }}"
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Stop only the two read-only app accounts after app rollback
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_readonly_health_host_cli }}"
+          - lock-readonly-health
+          - --instance-id
+          - "{{ dump_readonly_health_instance_id }}"
+          - --private-ip
+          - "{{ dump_readonly_health_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_readonly_health_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_readonly_health_stage_volume_id }}"
+          - --promotion-id
+          - "{{ dump_readonly_health_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_readonly_health_cutover_id }}"
+      register: dump_readonly_health_db_lock
+      changed_when: true
+      no_log: true
+      when: dump_readonly_health_phase == 'rollback-db'
+
+    - name: Revoke a prior non-authorizing health receipt after rollback
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_readonly_health_host_cli }}"
+          - revoke-readonly-health-receipt
+          - --promotion-id
+          - "{{ dump_readonly_health_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_readonly_health_cutover_id }}"
+      register: dump_readonly_health_receipt_revoke
+      changed_when: true
+      no_log: true
+      when: dump_readonly_health_phase == 'rollback-db'
+
+- name: Activate each app behind the fence and run SELECT-only health checks
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    dump_readonly_health_app_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+    dump_readonly_health_app_container: "{{ 'hospital-dr-web' if dump_readonly_health_app_kind == 'web' else 'hospital-dr-emr' }}"
+    dump_readonly_health_endpoint: /__hospital_dr/health
+  tasks:
+    - name: Recheck active ingress fence and exact prepared app container identity
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{% raw %}{{.State.Running}}|{{index .Config.Labels \"hospital-dr.db-cutover-id\"}}|{{.HostConfig.RestartPolicy.Name}}|{{json .HostConfig.PortBindings}}{% endraw %}"
+          - "{{ dump_readonly_health_app_container }}"
+      register: dump_readonly_health_prepared
+      changed_when: false
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Require stopped, exact-cutover, loopback-only app before start
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_prepared.stdout.split('|') | length == 4
+          - dump_readonly_health_prepared.stdout.split('|')[0] == 'false'
+          - dump_readonly_health_prepared.stdout.split('|')[1] == dump_readonly_health_cutover_id
+          - dump_readonly_health_prepared.stdout.split('|')[2] == 'no'
+          - (dump_readonly_health_prepared.stdout.split('|')[3] | from_json)['3000/tcp'][0]['HostIp'] == 'IP_REDACTED'
+          - (dump_readonly_health_prepared.stdout.split('|')[3] | from_json)['3000/tcp'][0]['HostPort'] == '3000'
+          - hostvars['isolated-dump-restore'].dump_readonly_health_db_identity.server_uuid is defined
+        fail_msg: App or database identity changed after the fresh DNS Preflight.
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Recheck the dedicated firewall fence immediately before app start
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/hospital-dr-dump-external-fence, verify]
+      register: dump_readonly_health_fence_before_start
+      changed_when: false
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Start only the exact cutover container with SELECT-only DB accounts
+      ansible.builtin.command:
+        argv: [docker, start, "{{ dump_readonly_health_app_container }}"]
+      register: dump_readonly_health_start
+      changed_when: true
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Wait for Docker's existing application health check
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{% raw %}{{.State.Health.Status}}{% endraw %}"
+          - "{{ dump_readonly_health_app_container }}"
+      register: dump_readonly_health_container_health
+      changed_when: false
+      retries: 24
+      delay: 5
+      until: dump_readonly_health_container_health.stdout | trim == 'healthy'
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Probe the required local application endpoint without retaining response content
+      ansible.builtin.uri:
+        url: "http://AWS_PUBLIC_IP_REDACTED:3000{{ dump_readonly_health_endpoint }}"
+        method: GET
+        status_code: 204
+        timeout: 10
+        return_content: false
+      register: dump_readonly_health_http
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: dump_readonly_health_http.status | default(0) | int == 204
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Verify the live container's actual isolated DB UUID and SELECT-only grants
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -i
+          - -e
+          - "DR_EXPECTED_APP_KIND={{ dump_readonly_health_app_kind }}"
+          - -e
+          - "DR_EXPECTED_DB_HOST={{ dump_readonly_health_private_ip }}"
+          - -e
+          - "DR_EXPECTED_DB_SERVER_UUID={{ hostvars['isolated-dump-restore'].dump_readonly_health_db_identity.server_uuid }}"
+          - "{{ dump_readonly_health_app_container }}"
+          - node
+          - -
+        stdin: "{{ lookup('file', playbook_dir ~ '/../../operations/db/dump_db_readonly_app_probe.js') }}"
+        stdin_add_newline: false
+      register: dump_readonly_health_app_db_probe
+      changed_when: false
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Require a verified DB UUID, current user and SELECT-only privilege response
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_app_db_probe.rc == 0
+          - "'DUMP_APP_DB_PROBE=PASS identity=true privileges=SELECT_ONLY' in dump_readonly_health_app_db_probe.stdout"
+        fail_msg: Application DB identity or read-only privilege check failed.
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Verify app runtime remains running only behind persistent ingress fencing
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/hospital-dr-dump-app-fence-probe
+          - --kind
+          - "{{ dump_readonly_health_app_kind }}"
+          - --cutover-id
+          - "{{ dump_readonly_health_cutover_id }}"
+          - --isolated-private-ip
+          - "{{ dump_readonly_health_private_ip }}"
+          - --mode
+          - readonly-active
+          - --db-server-uuid
+          - "{{ hostvars['isolated-dump-restore'].dump_readonly_health_db_identity.server_uuid }}"
+      register: dump_readonly_health_active_probe
+      changed_when: false
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Parse the non-sensitive app health evidence
+      ansible.builtin.set_fact:
+        dump_readonly_health_app_result: "{{ dump_readonly_health_active_probe.stdout | from_json }}"
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Require endpoint, DB identity, SELECT-only permission and traffic fence
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_app_result.status == 'PASS'
+          - dump_readonly_health_app_result.cutover_id == dump_readonly_health_cutover_id
+          - dump_readonly_health_app_result.db_host == dump_readonly_health_private_ip
+          - dump_readonly_health_app_result.db_server_uuid == hostvars['isolated-dump-restore'].dump_readonly_health_db_identity.server_uuid
+          - dump_readonly_health_app_result.external_fence | bool
+          - dump_readonly_health_app_result.select_only_probe | bool
+          - dump_readonly_health_http.status | int == 204
+        fail_msg: Read-only app Health Gate did not satisfy its non-authorizing contract.
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Record only non-sensitive app check facts for the DB receipt
+      ansible.builtin.set_fact:
+        dump_readonly_health_app_receipt:
+          status: PASS
+          host: "{{ dump_readonly_health_app_result.host }}"
+          source_ip: "{{ dump_readonly_health_app_result.source_ip }}"
+          cutover_id: "{{ dump_readonly_health_app_result.cutover_id }}"
+          db_host: "{{ dump_readonly_health_app_result.db_host }}"
+          db_port: 3307
+          db_server_uuid: "{{ dump_readonly_health_app_result.db_server_uuid }}"
+          health_endpoint: "{{ dump_readonly_health_endpoint }}"
+          external_fence: true
+          container_running: true
+          restart_policy: no
+          select_only_probe: true
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+- name: Persist the separate non-authorizing receipt after both app checks pass
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_readonly_health_host_cli: /usr/local/lib/hospital-dr-dump-readonly-health/dump_db_readonly_health_host.py
+  tasks:
+    - name: Record the isolated DB identity and both app Health results
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_readonly_health_host_cli }}"
+          - record-readonly-health
+          - --instance-id
+          - "{{ dump_readonly_health_instance_id }}"
+          - --private-ip
+          - "{{ dump_readonly_health_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_readonly_health_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_readonly_health_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_readonly_health_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_readonly_health_backup_id }}"
+          - --promotion-id
+          - "{{ dump_readonly_health_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_readonly_health_cutover_id }}"
+          - --expected-db-server-uuid
+          - "{{ dump_readonly_health_db_identity.server_uuid }}"
+          - --apps-json
+          - "{{ {'web': hostvars['dr-web'].dump_readonly_health_app_receipt, 'emr': hostvars['dr-doc'].dump_readonly_health_app_receipt} | to_json }}"
+      register: dump_readonly_health_receipt
+      changed_when: true
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Require an explicitly non-authorizing health receipt
+      ansible.builtin.assert:
+        that:
+          - dump_readonly_health_receipt.rc == 0
+          - "'DUMP_READONLY_HEALTH_RECEIPT=APPS_READONLY_HEALTH_VERIFIED_NOT_DNS_AUTHORIZED dns_authorized=false application_writes_allowed=false' in dump_readonly_health_receipt.stdout"
+        fail_msg: Read-only app health receipt could not be safely recorded.
+      no_log: true
+      when: dump_readonly_health_phase == 'activate'
+
+- name: Report the non-authorizing read-only app Health Gate result
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Emit success only after both apps and DB receipt passed
+      ansible.builtin.debug:
+        msg: DUMP_READONLY_HEALTH=APPS_READONLY_HEALTH_VERIFIED_NOT_DNS_AUTHORIZED dns_authorized=false application_writes_allowed=false dr_state_changed=false
+      when: dump_readonly_health_phase == 'activate'
+
+    - name: Emit prepare-only result without claiming application health
+      ansible.builtin.debug:
+        msg: DUMP_READONLY_HEALTH_PREPARE=PASS apps_stopped=true external_traffic_fenced=true dns_authorized=false
+      when: dump_readonly_health_phase == 'prepare'
+
+    - name: Emit app rollback result only after stopped-state assertion
+      ansible.builtin.debug:
+        msg: DUMP_READONLY_HEALTH_APP_ROLLBACK=PASS apps_stopped=true external_traffic_fenced=true
+      when: dump_readonly_health_phase == 'rollback-apps'
+
+    - name: Emit DB rollback result only after accounts are locked and receipt revoked
+      ansible.builtin.debug:
+        msg: DUMP_READONLY_HEALTH_DB_ROLLBACK=PASS service_accounts_locked=true
+      when: dump_readonly_health_phase == 'rollback-db'

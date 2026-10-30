@@ -1,0 +1,89 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "gauge",
+      "title": "Current / Latest RTO",
+      "description": "Detection-based RTO: Zabbix Problem event timestamp to verified service recovery. Actual fault onset is not available. Missing data is not a PASS.",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"min": 0, "max": 3600, "unit": "s", "noValue": "NO COMPLETED DR RUN", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1200}, {"color": "red", "value": 3600}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": true, "showThresholdMarkers": true},
+      "targets": [{"refId": "A", "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "group": {"filter": "Linux servers"}, "host": {"filter": "Hospital_DR_Automation"}, "item": {"filter": "DR total RTO seconds"}, "resultFormat": "time_series"}]
+    },
+    {
+      "id": 2,
+      "type": "text",
+      "title": "RTO Target",
+      "description": "Project target: 1 hour / 3600 seconds.",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "options": {"mode": "markdown", "content": "# RTO TARGET\n\n**3600 seconds / 1 hour**\n\nMeasured from the Zabbix Problem event timestamp to verified service recovery. Actual fault onset is not available; this is detection-based RTO. Missing evidence remains NOT MEASURED."}
+    },
+    {
+      "id": 3,
+      "type": "text",
+      "title": "RTO PASS / FAIL",
+      "description": "1=PASS, 0=FAIL, -1=NOT MEASURED. Direct NR does not affect this RTO result.",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+    },
+    {
+      "id": 4,
+      "type": "text",
+      "title": "Incident → Detection",
+      "description": "Zabbix Problem event time → ChatOps correlation time.",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 6},
+      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+    },
+    {
+      "id": 5,
+      "type": "text",
+      "title": "Detection → Approval Request",
+      "description": "zabbix_detected_at → failover_approval_created_at.",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 6},
+      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+    },
+    {
+      "id": 6,
+      "type": "text",
+      "title": "Approval Request → Approved",
+      "description": "failover_approval_created_at → failover_approved_at.",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 6},
+      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+    },
+    {
+      "id": 7,
+      "type": "text",
+      "title": "Approved → Failover Start",
+      "description": "failover_approved_at → failover_started_at.",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 6},
+      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+    },
+    {
+      "id": 8,
+      "type": "text",
+      "title": "Failover Start → Service Recovery",
+      "description": "failover_started_at → service_recovered_at.",
+      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 11},
+      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+    },
+    {
+      "id": 9,
+      "type": "text",
+      "title": "RPO Status",
+      "description": "Direct Native Replication is not complete; no numeric RPO claim is shown.",
+      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 11},
+      "options": {"mode": "markdown", "content": "# RPO TARGET: 15 MINUTES\n\n**Target: 900 seconds**\n\n**Current measurement: NOT MEASURED.** Direct NR remains blocked by the On-Prem pfSense TCP/3306 path. A backup-file timestamp alone is not treated as proof of the recovered data cutoff; no RPO PASS/FAIL or zero-loss claim is made."}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["MSP", "DR", "RTO", "RPO"],
+  "templating": {"list": []},
+  "time": {"from": "now-7d", "to": "now"},
+  "title": "Hospital DR RTO / RPO Readiness",
+  "uid": "hospital-dr-rto",
+  "version": 1
+}

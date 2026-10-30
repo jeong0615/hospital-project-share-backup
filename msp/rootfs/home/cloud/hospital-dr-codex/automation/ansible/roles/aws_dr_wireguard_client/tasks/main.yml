@@ -1,0 +1,137 @@
+---
+- name: Keep the optional AWS DR WireGuard client disabled by default
+  ansible.builtin.debug:
+    msg: "AWS_DR_WG_ENABLED is false; no On-Prem WireGuard package, interface, route, or service is changed."
+  when: not (aws_dr_wg_enabled | bool)
+
+- name: Validate the dedicated client contract before any live change
+  ansible.builtin.assert:
+    that:
+      - aws_dr_wg_interface == 'wg-aws-dr'
+      - aws_dr_wg_cidr == 'AWS_PUBLIC_IP_REDACTED/24'
+      - aws_dr_wg_client_address == 'AWS_PUBLIC_IP_REDACTED/32'
+      - aws_dr_wg_aws_db_ip == 'AWS_PUBLIC_IP_REDACTED/32'
+      - aws_dr_wg_endpoint == 'AWS_PUBLIC_IP_REDACTED:51821'
+      - aws_dr_wg_listen_port | int == 51821
+      - "'wg0' not in aws_dr_wg_interface"
+      - "'10.250.' not in aws_dr_wg_cidr"
+      - "'192.168.200.' not in aws_dr_wg_cidr"
+    fail_msg: "AWS DR WireGuard client contract mismatch; refusing live configuration."
+  when: aws_dr_wg_enabled | bool
+
+- name: Check for the active legacy AWS WireGuard interface before cutover
+  ansible.builtin.command: ip link show wg-aws-hub
+  register: aws_dr_wg_legacy_interface
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: aws_dr_wg_enabled | bool
+
+- name: Check for the legacy AWS DB route before cutover
+  ansible.builtin.command: ip route show IP_REDACTED/32
+  register: aws_dr_wg_legacy_route
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: aws_dr_wg_enabled | bool
+
+- name: Refuse the new client while the legacy route is active
+  ansible.builtin.assert:
+    that:
+      - aws_dr_wg_legacy_interface.rc != 0
+      - "(aws_dr_wg_legacy_route.stdout | default('') | trim) == ''"
+    fail_msg: >-
+      The legacy wg-aws-hub interface or its AWS_PUBLIC_IP_REDACTED/32 route is still
+      active. Perform the reviewed, reversible cutover first; this role will
+      never stop the legacy tunnel automatically.
+  when:
+    - aws_dr_wg_enabled | bool
+    - not (aws_dr_wg_prepare_only | bool)
+
+- name: Record the preserved legacy path during configuration preparation
+  ansible.builtin.debug:
+    msg: >-
+      Preparation-only mode: wg-aws-hub and its AWS_PUBLIC_IP_REDACTED/32 route remain
+      untouched; wg-aws-dr will not be started or enabled.
+  when:
+    - aws_dr_wg_enabled | bool
+    - aws_dr_wg_prepare_only | bool
+
+- name: Install WireGuard tooling only when explicitly enabled
+  ansible.builtin.apt:
+    name: wireguard-tools
+    state: present
+    update_cache: true
+  when:
+    - aws_dr_wg_enabled | bool
+    - not (aws_dr_wg_prepare_only | bool)
+
+- name: Verify the On-Prem client private key is supplied outside the repository
+  ansible.builtin.stat:
+    path: "{{ aws_dr_wg_onprem_private_key_file }}"
+  register: aws_dr_wg_onprem_private_key_stat
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Verify the AWS Web peer public key is supplied outside the repository
+  ansible.builtin.stat:
+    path: "{{ aws_dr_wg_web_public_key_file }}"
+  register: aws_dr_wg_web_public_key_stat
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Fail closed when runtime key material is absent
+  ansible.builtin.assert:
+    that:
+      - aws_dr_wg_onprem_private_key_stat.stat.exists
+      - aws_dr_wg_onprem_private_key_stat.stat.isreg
+      - aws_dr_wg_onprem_private_key_stat.stat.mode == '0600'
+      - aws_dr_wg_web_public_key_stat.stat.exists
+      - aws_dr_wg_web_public_key_stat.stat.isreg
+    fail_msg: "AWS DR WireGuard key files must be provisioned outside Git before enabling the path."
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Read runtime key material without logging its contents
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop:
+    - { name: onprem_private, path: "{{ aws_dr_wg_onprem_private_key_file }}" }
+    - { name: web_public, path: "{{ aws_dr_wg_web_public_key_file }}" }
+  loop_control:
+    label: "{{ item.name }}"
+  register: aws_dr_wg_client_keys
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Ensure the dedicated WireGuard configuration directory exists
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: aws_dr_wg_enabled | bool
+
+- name: Render only the dedicated AWS DR WireGuard client interface
+  ansible.builtin.template:
+    src: wg-aws-dr.conf.j2
+    dest: "/etc/wireguard/{{ aws_dr_wg_interface }}.conf"
+    owner: root
+    group: root
+    mode: '0600'
+  vars:
+    aws_dr_wg_onprem_private_key: "{{ aws_dr_wg_client_keys.results[0].content | b64decode | trim }}"
+    aws_dr_wg_web_public_key: "{{ aws_dr_wg_client_keys.results[1].content | b64decode | trim }}"
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Start only the dedicated AWS DR WireGuard service
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ aws_dr_wg_interface }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - aws_dr_wg_enabled | bool
+    - not (aws_dr_wg_prepare_only | bool)

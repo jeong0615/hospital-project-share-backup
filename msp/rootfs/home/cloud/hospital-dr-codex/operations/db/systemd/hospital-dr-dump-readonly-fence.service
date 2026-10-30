@@ -1,0 +1,13 @@
+[Unit]
+Description=Hospital DR Dump pre-DNS external HTTP(S) fence
+DefaultDependencies=no
+Before=network-pre.target docker.service nginx.service apache2.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hospital-dr-dump-external-fence ensure
+RemainAfterExit=yes
+
+[Install]
+WantedBy=network-pre.target

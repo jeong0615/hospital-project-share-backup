@@ -1,0 +1,10 @@
+[Interface]
+Address = {{ aws_dr_wg_client_address }}
+PrivateKey = {{ aws_dr_wg_onprem_private_key }}
+SaveConfig = false
+
+[Peer]
+PublicKey = {{ aws_dr_wg_web_public_key }}
+Endpoint = {{ aws_dr_wg_endpoint }}
+AllowedIPs = {{ aws_dr_wg_aws_db_ip }}
+PersistentKeepalive = 25

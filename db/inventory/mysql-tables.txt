@@ -1,0 +1,8 @@
+Database: hospital_db
+
+AccessLogs
+Doctors
+MedicalRecords
+Patients
+ReservationPosts
+Users

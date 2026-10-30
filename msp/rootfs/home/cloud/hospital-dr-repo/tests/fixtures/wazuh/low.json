@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-09-05T09:00:00.000+0900",
+  "rule": {
+    "id": "5710",
+    "level": 5,
+    "description": "A low-priority system event was recorded",
+    "groups": ["system"]
+  },
+  "agent": {"id": "001", "name": "DB_Server", "ip": "IP_REDACTED"},
+  "decoder": {"name": "syslog"},
+  "full_log": "low priority event"
+}

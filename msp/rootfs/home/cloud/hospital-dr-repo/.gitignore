@@ -1,0 +1,48 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+dr.env
+.aws/
+
+# Terraform local state and working directory
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Keys, certificates, encrypted backups, and dumps
+*.pem
+*.key
+*.p12
+*.pfx
+*.enc
+*.sql.gz
+*.sql.gz.enc
+db_backups/
+
+# Runtime output and operator history
+*.log
+*.history
+*.sqlite3
+*.sqlite3-*
+.bash_history
+.codex/
+
+# Dependencies and generated artifacts
+node_modules/
+__pycache__/
+*.py[cod]
+dist/
+build/
+coverage/
+grafana/data/
+zabbix/*_data/
+wazuh/*_data/
+
+# Local-only backup/config artifacts
+firebase_backup.json
+terraform.tfstate.backup
+.nat-schedule-enabled
+
+# Keep provider lock files for reproducible Terraform runs
+!.terraform.lock.hcl

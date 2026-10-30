@@ -1,0 +1,733 @@
+name: Docker Build and Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-security-scan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-scan-test:
+    name: ${{ matrix.name }} build and scan
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: web
+            context: services/web
+            image: hospital-dr-web-ci
+            ecr_repository: hospital-dr-web
+            health_path: /health
+          - name: emr
+            context: services/emr
+            image: hospital-dr-emr-ci
+            ecr_repository: hospital-dr-emr
+            health_path: /
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: hospital_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h IP_REDACTED -uroot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    env:
+      IMAGE_REF: ${{ matrix.image }}:${{ github.sha }}
+      HEALTH_PATH: ${{ matrix.health_path }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare reports
+        run: mkdir -p "reports/${{ matrix.name }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image without pushing
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          tags: ${{ env.IMAGE_REF }}
+          pull: true
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+
+      - name: Run npm audit report
+        id: npm_audit
+        working-directory: ${{ matrix.context }}
+        shell: bash
+        run: |
+          set +e
+          npm audit --omit=dev --json > "${GITHUB_WORKSPACE}/reports/${{ matrix.name }}/${{ matrix.name }}-npm-audit.json"
+          audit_exit=$?
+          npm audit --omit=dev --audit-level=high 2>&1 | tee "${GITHUB_WORKSPACE}/reports/${{ matrix.name }}/${{ matrix.name }}-npm-audit.txt"
+          audit_log_exit=${PIPESTATUS[0]}
+          {
+            echo "exit_code=${audit_exit}"
+            echo "log_exit_code=${audit_log_exit}"
+          } >> "${GITHUB_OUTPUT}"
+          exit 0
+
+      - name: Trivy OS vulnerability scan
+        id: trivy_os
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: json
+          output: reports/${{ matrix.name }}/${{ matrix.name }}-os.json
+          vuln-type: os
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Trivy OS scan log
+        if: always() && steps.build.outcome == 'success'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: table
+          vuln-type: os
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Trivy library vulnerability scan
+        id: trivy_library
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: json
+          output: reports/${{ matrix.name }}/${{ matrix.name }}-library.json
+          vuln-type: library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Trivy library scan log
+        if: always() && steps.build.outcome == 'success'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: table
+          vuln-type: library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Generate ephemeral CI runtime secret
+        if: steps.build.outcome == 'success'
+        run: echo "CI_SESSION_SECRET=$(openssl rand -hex 32)" >> "${GITHUB_ENV}"
+
+      - name: Start container and run HTTP/health checks
+        id: health_checks
+        if: steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="hospital-dr-${{ matrix.name }}-ci"
+          container_health="failed"
+          http_check="not_run"
+          cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+          publish_results() {
+            {
+              echo "container_health=${container_health}"
+              echo "http_check=${http_check}"
+            } >> "${GITHUB_OUTPUT}"
+          }
+          trap 'publish_results; cleanup' EXIT
+
+          docker run -d \
+            --name "$container" \
+            --network host \
+            --health-cmd="node -e \"require('http').get('http://IP_REDACTED:3000' + process.env.HEALTH_PATH, r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\"" \
+            --health-interval=5s \
+            --health-timeout=5s \
+            --health-retries=12 \
+            --health-start-period=15s \
+            -e NODE_ENV=production \
+            -e PORT=3000 \
+            -e HEALTH_PATH="${HEALTH_PATH}" \
+            -e SERVER_ROLE=ci-${{ matrix.name }} \
+            -e DB_HOST=IP_REDACTED \
+            -e DB_PORT=3306 \
+            -e DB_USER=root \
+            -e DB_PASSWORD= \
+            -e DB_NAME=hospital_db \
+            -e SESSION_SECRET="${CI_SESSION_SECRET}" \
+            "$IMAGE_REF"
+
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || true)"
+            if [ "$health" = healthy ]; then
+              break
+            fi
+            if [ "$health" = unhealthy ]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container")" = healthy
+          container_health="success"
+          if curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+            "http://IP_REDACTED:3000${HEALTH_PATH}" >/dev/null; then
+            http_check="success"
+          else
+            http_check="failed"
+            exit 1
+          fi
+
+      - name: Summarize findings
+        if: always()
+        shell: bash
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          HEALTH_OUTCOME: ${{ steps.health_checks.outcome }}
+          CONTAINER_HEALTH: ${{ steps.health_checks.outputs.container_health }}
+          HTTP_CHECK: ${{ steps.health_checks.outputs.http_check }}
+        run: |
+          set +e
+          os_report="reports/${{ matrix.name }}/${{ matrix.name }}-os.json"
+          library_report="reports/${{ matrix.name }}/${{ matrix.name }}-library.json"
+          health_outcome="${HEALTH_OUTCOME:-skipped}"
+
+          count_severity() {
+            report="$1"
+            severity="$2"
+            if [ -f "$report" ]; then
+              jq --arg severity "$severity" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $severity)] | length' "$report" 2>/dev/null || echo 0
+            else
+              echo 0
+            fi
+          }
+
+          count_fixed() {
+            report="$1"
+            if [ -f "$report" ]; then
+              jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select((.FixedVersion // "") != "")] | length' "$report" 2>/dev/null || echo 0
+            else
+              echo 0
+            fi
+          }
+
+          count_unfixed() {
+            report="$1"
+            if [ -f "$report" ]; then
+              jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select((.FixedVersion // "") == "")] | length' "$report" 2>/dev/null || echo 0
+            else
+              echo 0
+            fi
+          }
+
+          count_os_status() {
+            report="$1"
+            severity="$2"
+            status="$3"
+            if [ "$status" = fixed ]; then
+              jq --arg severity "$severity" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $severity) | select((.FixedVersion // "") != "")] | length' "$report" 2>/dev/null || echo 0
+            else
+              jq --arg severity "$severity" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $severity) | select((.FixedVersion // "") == "")] | length' "$report" 2>/dev/null || echo 0
+            fi
+          }
+
+          render_details() {
+            report="$1"
+            if [ ! -s "$report" ]; then
+              echo "_Report unavailable (the scan may have been skipped or failed before producing JSON)._"
+              return
+            fi
+
+            rows="$(jq -r '
+              .Results[]? as $result
+              | ($result.Vulnerabilities // [])[]
+              | select(.Severity == "CRITICAL" or .Severity == "HIGH")
+              | [
+                  (.Severity // "-"),
+                  (.VulnerabilityID // "-"),
+                  (.PkgName // "-"),
+                  (.InstalledVersion // "-"),
+                  (if (.FixedVersion // "") == "" then "-" else .FixedVersion end),
+                  ($result.Target // "-")
+                ]
+              | map(tostring | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]"; " "))
+              | @tsv
+            ' "$report" 2>/dev/null)"
+
+            if [ -z "$rows" ]; then
+              echo "No CRITICAL/HIGH findings in this report."
+              return
+            fi
+
+            while IFS=$'\t' read -r severity vulnerability_id package installed fixed target; do
+              printf '| `%s` | `%s` | `%s` | `%s` | `%s` | `%s` |\n' \
+                "$severity" "$vulnerability_id" "$package" "$installed" "$fixed" "$target"
+            done <<< "$rows"
+          }
+
+          os_critical="$(count_severity "$os_report" CRITICAL)"
+          os_high="$(count_severity "$os_report" HIGH)"
+          library_critical="$(count_severity "$library_report" CRITICAL)"
+          library_high="$(count_severity "$library_report" HIGH)"
+          os_fixed="$(count_fixed "$os_report")"
+          os_unfixed="$(count_unfixed "$os_report")"
+          library_fixed="$(count_fixed "$library_report")"
+          library_unfixed="$(count_unfixed "$library_report")"
+          os_fixable_critical="$(count_os_status "$os_report" CRITICAL fixed)"
+          os_fixable_high="$(count_os_status "$os_report" HIGH fixed)"
+          os_unfixed_critical="$(count_os_status "$os_report" CRITICAL unfixed)"
+          os_unfixed_high="$(count_os_status "$os_report" HIGH unfixed)"
+          fixable_total=$((os_fixable_critical + os_fixable_high))
+          {
+            echo "## ${{ matrix.name }} Docker security summary"
+            echo ""
+            echo "| Source | Critical | High |"
+            echo "| --- | ---: | ---: |"
+            echo "| OS packages | ${os_critical} | ${os_high} |"
+            echo "| npm/library | ${library_critical} | ${library_high} |"
+            echo ""
+            echo "### Security gate classification"
+            echo ""
+            echo "| Classification | Count |"
+            echo "| --- | ---: |"
+            echo "| Fixable Critical/High | ${fixable_total} |"
+            echo "| Unfixed upstream OS Critical | ${os_unfixed_critical} |"
+            echo "| Unfixed upstream OS High | ${os_unfixed_high} |"
+            echo ""
+            echo "### Scan and health status"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Image build | \`${BUILD_OUTCOME:-unknown}\` |"
+            echo "| HTTP/Health Check | \`${health_outcome}\` |"
+            echo "| Container Health | \`${CONTAINER_HEALTH:-not_run}\` |"
+            echo "| HTTP endpoint | \`${HTTP_CHECK:-not_run}\` |"
+            echo "| OS JSON report | \`$([ -s "$os_report" ] && echo available || echo unavailable)\` |"
+            echo "| Library JSON report | \`$([ -s "$library_report" ] && echo available || echo unavailable)\` |"
+            echo ""
+            echo "### Fixed-version summary"
+            echo ""
+            echo "| Scope | FixedVersion present | FixedVersion unavailable |"
+            echo "| --- | ---: | ---: |"
+            echo "| OS packages | ${os_fixed} | ${os_unfixed} |"
+            echo "| npm/library | ${library_fixed} | ${library_unfixed} |"
+            echo ""
+            echo "### OS package findings (CRITICAL/HIGH)"
+            echo ""
+            echo "| Severity | VulnerabilityID | PkgName | InstalledVersion | FixedVersion | Target |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            render_details "$os_report"
+            echo ""
+            echo "### npm/library findings (CRITICAL/HIGH)"
+            echo ""
+            echo "| Severity | VulnerabilityID | PkgName | InstalledVersion | FixedVersion | Target |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            render_details "$library_report"
+            echo ""
+            echo "Known ECR baseline: Critical 5 / High 21. ECR push runs only in the separate gated job."
+            echo "EMR mysql2 is pinned to 3.24.3 after compatibility validation."
+          } | tee "reports/${{ matrix.name }}/${{ matrix.name }}-summary.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload build and scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-security-${{ matrix.name }}-${{ github.sha }}
+          path: reports/${{ matrix.name }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce security gate
+        if: always()
+        shell: bash
+        env:
+          NPM_AUDIT_EXIT: ${{ steps.npm_audit.outputs.exit_code }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          HEALTH_OUTCOME: ${{ steps.health_checks.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+          os_report="reports/${{ matrix.name }}/${{ matrix.name }}-os.json"
+          library_report="reports/${{ matrix.name }}/${{ matrix.name }}-library.json"
+
+          if [ "${BUILD_OUTCOME:-unknown}" != "success" ]; then
+            echo "::error::The container image build did not succeed."
+            failed=1
+          fi
+
+          if [ "${HEALTH_OUTCOME:-unknown}" != "success" ]; then
+            echo "::error::HTTP/container health checks did not succeed."
+            failed=1
+          fi
+
+          count_os_status() {
+            report="$1"
+            severity="$2"
+            status="$3"
+            if [ "$status" = fixed ]; then
+              jq --arg severity "$severity" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $severity) | select((.FixedVersion // "") != "")] | length' "$report"
+            else
+              jq --arg severity "$severity" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $severity) | select((.FixedVersion // "") == "")] | length' "$report"
+            fi
+          }
+
+          count_library_findings() {
+            report="$1"
+            jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] | length' "$report"
+          }
+
+          if [ ! -s "$os_report" ]; then
+            echo "::error::OS Trivy JSON report is missing."
+            failed=1
+          else
+            os_fixable_critical="$(count_os_status "$os_report" CRITICAL fixed)"
+            os_fixable_high="$(count_os_status "$os_report" HIGH fixed)"
+            os_unfixed_critical="$(count_os_status "$os_report" CRITICAL unfixed)"
+            os_unfixed_high="$(count_os_status "$os_report" HIGH unfixed)"
+            if [ $((os_fixable_critical + os_fixable_high)) -gt 0 ]; then
+              echo "::error::Fixable OS CRITICAL/HIGH vulnerabilities were found."
+              failed=1
+            fi
+            if [ $((os_unfixed_critical + os_unfixed_high)) -gt 0 ]; then
+              echo "::warning::Unfixed upstream OS vulnerabilities remain: CRITICAL=${os_unfixed_critical}, HIGH=${os_unfixed_high}."
+            fi
+          fi
+
+          if [ ! -s "$library_report" ]; then
+            echo "::error::Library Trivy JSON report is missing."
+            failed=1
+          else
+            library_findings="$(count_library_findings "$library_report")"
+            if [ "$library_findings" -gt 0 ]; then
+              echo "::error::Application/library CRITICAL/HIGH vulnerabilities were found."
+              failed=1
+            fi
+          fi
+
+          if [ "${NPM_AUDIT_EXIT:-1}" != 0 ]; then
+            echo "::error::npm audit reported vulnerabilities or could not complete."
+            failed=1
+          fi
+          exit "$failed"
+
+      - name: Export gated image for ECR push
+        if: github.event_name != 'pull_request' && success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save "${IMAGE_REF}" | gzip -c > "${RUNNER_TEMP}/${{ matrix.name }}-image.tar.gz"
+
+      - name: Upload gated image
+        if: github.event_name != 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gated-image-${{ matrix.name }}-${{ github.sha }}
+          path: ${{ runner.temp }}/${{ matrix.name }}-image.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  emr-mysql2-compatibility:
+    name: EMR mysql2 3.x compatibility test
+    runs-on: ubuntu-24.04
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: hospital_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h IP_REDACTED -uroot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install EMR dependencies with mysql2 3.x override
+        id: install_mysql2
+        working-directory: services/emr
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --omit=dev
+          npm install --no-save --package-lock=false --ignore-scripts 'mysql2@3.24.3'
+          version="$(node -p "require('mysql2/package.json').version")"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare ephemeral MySQL schema
+        working-directory: services/emr
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const mysql = require('mysql2/promise');
+
+          (async () => {
+            const admin = await mysql.createConnection({
+              host: 'IP_REDACTED',
+              port: 3306,
+              user: 'root',
+              password: ''
+            });
+            await admin.query('CREATE DATABASE IF NOT EXISTS hospital_db');
+            await admin.end();
+
+            const db = await mysql.createConnection({
+              host: 'IP_REDACTED',
+              port: 3306,
+              user: 'root',
+              password: '',
+              database: 'hospital_db'
+            });
+            await db.query(`
+              CREATE TABLE IF NOT EXISTS Doctors (
+                doctor_id INT PRIMARY KEY AUTO_INCREMENT,
+                name VARCHAR(100) NOT NULL,
+                department VARCHAR(100) NOT NULL
+              )
+            `);
+            await db.query(`
+              CREATE TABLE IF NOT EXISTS Users (
+                user_id INT PRIMARY KEY AUTO_INCREMENT,
+                login_id VARCHAR(50) NOT NULL,
+                role VARCHAR(20) NOT NULL,
+                name VARCHAR(100) NOT NULL,
+                password VARCHAR(255) NOT NULL
+              )
+            `);
+            await db.query(`
+              CREATE TABLE IF NOT EXISTS Patients (
+                patient_id INT PRIMARY KEY AUTO_INCREMENT,
+                name VARCHAR(100) NOT NULL,
+                gender VARCHAR(20) NOT NULL,
+                birth_date DATE NOT NULL,
+                phone VARCHAR(50)
+              )
+            `);
+            await db.query(`
+              CREATE TABLE IF NOT EXISTS MedicalRecords (
+                record_id INT PRIMARY KEY AUTO_INCREMENT,
+                patient_id INT NOT NULL,
+                visit_date DATETIME NOT NULL,
+                diagnosis VARCHAR(255) NOT NULL,
+                doctor_id INT
+              )
+            `);
+            await db.query(`
+              CREATE TABLE IF NOT EXISTS AccessLogs (
+                log_id INT PRIMARY KEY AUTO_INCREMENT,
+                user_id INT NOT NULL,
+                action_type VARCHAR(50) NOT NULL,
+                access_time DATETIME NOT NULL,
+                ip_address VARCHAR(255)
+              )
+            `);
+            await db.query(
+              'INSERT INTO Doctors (name, department) VALUES (?, ?)',
+              ['Compatibility Doctor', 'Test Medicine']
+            );
+            await db.query(
+              'INSERT INTO Users (login_id, role, name, password) VALUES (?, ?, ?, ?)',
+              ['compat', 'DOC', 'Compatibility User', 'compat-pass']
+            );
+            await db.query(
+              'INSERT INTO Patients (name, gender, birth_date, phone) VALUES (?, ?, ?, ?)',
+              ['Compatibility Patient', 'TEST', '2000-01-01', '000-0000']
+            );
+            await db.end();
+          })().catch(error => {
+            console.error(`MySQL compatibility schema failed: ${error.message}`);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Run EMR mysql2 3.x API compatibility checks
+        id: compatibility
+        working-directory: services/emr
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_log="${RUNNER_TEMP}/emr-mysql2-compatibility.log"
+          PORT=3000 \
+            DB_HOST=IP_REDACTED \
+            DB_PORT=3306 \
+            DB_USER=root \
+            DB_PASSWORD= \
+            DB_NAME=hospital_db \
+            node server.js > "${app_log}" 2>&1 &
+          app_pid=$!
+          cleanup() {
+            kill "${app_pid}" >/dev/null 2>&1 || true
+            wait "${app_pid}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://IP_REDACTED:3000/api/patients >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "${ready}" -ne 1 ]; then
+            cat "${app_log}"
+            exit 1
+          fi
+
+          curl --fail --silent --show-error http://IP_REDACTED:3000/ >/dev/null
+          curl --fail --silent --show-error http://IP_REDACTED:3000/api/patients >/dev/null
+          curl --fail --silent --show-error \
+            -X POST http://IP_REDACTED:3000/api/patients \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"API Compatibility Patient","birth_date":"2001-01-01","gender":"TEST","phone":"000-0001"}' >/dev/null
+          curl --fail --silent --show-error http://IP_REDACTED:3000/api/patients/1 >/dev/null
+          curl --fail --silent --show-error http://IP_REDACTED:3000/api/medical-records/recent >/dev/null
+          curl --fail --silent --show-error http://IP_REDACTED:3000/api/medical-records/stats >/dev/null
+          curl --fail --silent --show-error \
+            -X POST http://IP_REDACTED:3000/api/medical-records \
+            -H 'Content-Type: application/json' \
+            -d '{"patient_id":1,"visit_date":"2026-09-02 12:00:00","diagnosis":"Compatibility test","doctor_id":1}' >/dev/null
+          curl --fail --silent --show-error http://IP_REDACTED:3000/api/medical-records/patient/1 >/dev/null
+          curl --fail --silent --show-error \
+            -X POST http://IP_REDACTED:3000/api/logs \
+            -H 'Content-Type: application/json' \
+            -d '{"user_id":1,"action_type":"COMPATIBILITY_TEST"}' >/dev/null
+          curl --fail --silent --show-error http://IP_REDACTED:3000/api/logs >/dev/null
+          curl --fail --silent --show-error \
+            -X POST http://IP_REDACTED:3000/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"login_id":"compat","password":"<SET_IN_SECRET_STORE>"}' >/dev/null
+
+          echo "compatibility=passed" >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize mysql2 compatibility result
+        if: always()
+        env:
+          MYSQL2_VERSION: ${{ steps.install_mysql2.outputs.version }}
+          INSTALL_OUTCOME: ${{ steps.install_mysql2.outcome }}
+          TEST_OUTCOME: ${{ steps.compatibility.outcome }}
+        run: |
+          {
+            echo "## EMR mysql2 compatibility"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| mysql2 version under test | \`${MYSQL2_VERSION:-not_installed}\` |"
+            echo "| Dependency installation | \`${INSTALL_OUTCOME}\` |"
+            echo "| Connection/query/API/HTTP checks | \`${TEST_OUTCOME}\` |"
+            echo ""
+            echo "The repository package.json/package-lock.json remains unchanged by this compatibility test."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  push-ecr-images:
+    name: Push gated ${{ matrix.name }} image to ECR
+    needs:
+      - build-scan-test
+      - emr-mysql2-compatibility
+    if: >-
+      github.event_name != 'pull_request' &&
+      needs.build-scan-test.result == 'success' &&
+      needs.emr-mysql2-compatibility.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: web
+            image: hospital-dr-web-ci
+            ecr_repository: hospital-dr-web
+          - name: emr
+            image: hospital-dr-emr-ci
+            ecr_repository: hospital-dr-emr
+
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - name: Download gated image
+        uses: actions/download-artifact@v4
+        with:
+          name: gated-image-${{ matrix.name }}-${{ github.sha }}
+          path: ${{ runner.temp }}/gated-image
+
+      - name: Load gated image
+        shell: bash
+        run: docker load --input "${RUNNER_TEMP}/gated-image/${{ matrix.name }}-image.tar.gz"
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: AWS_ARN_REDACTED
+          aws-region: ap-northeast-2
+          role-session-name: hospital-dr-${{ matrix.name }}-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push immutable commit image
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr_login.outputs.registry }}
+        run: |
+          set -euo pipefail
+          source_image="${{ matrix.image }}:${IMAGE_TAG}"
+          target_image="${ECR_REGISTRY}/${{ matrix.ecr_repository }}:${IMAGE_TAG}"
+          docker tag "${source_image}" "${target_image}"
+          push_log="${RUNNER_TEMP}/${{ matrix.name }}-ecr-push.log"
+          docker push "${target_image}" 2>&1 | tee "${push_log}"
+          digest="$(awk '/digest: sha256:/ { print $2; exit }' "${push_log}")"
+          if [ -z "${digest}" ]; then
+            echo "::error::ECR push completed without a digest in the Docker output."
+            exit 1
+          fi
+          {
+            echo "## ECR push: ${{ matrix.name }}"
+            echo ""
+            echo "| Repository | Tag | Digest |"
+            echo "| --- | --- | --- |"
+            echo "| \`${{ matrix.ecr_repository }}\` | \`${IMAGE_TAG}\` | \`${digest}\` |"
+            echo ""
+            echo "ECR scan-on-push is enabled; scan findings are verified outside this push-only role."
+          } >> "${GITHUB_STEP_SUMMARY}"

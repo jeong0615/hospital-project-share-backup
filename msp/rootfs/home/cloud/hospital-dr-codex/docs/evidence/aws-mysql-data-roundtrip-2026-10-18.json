@@ -1,0 +1,30 @@
+{
+  "checked_at_kst": "2026-10-18 23:57",
+  "scope": "synthetic-only; not production DR or Node EMR application E2E",
+  "canary_run_id": "snc-20261017-a1",
+  "aws_account_id": "AWS_ACCOUNT_ID_REDACTED",
+  "aws_region": "ap-northeast-2",
+  "aws_instance_id": "AWS_RESOURCE_ID_REDACTED",
+  "vpc_id": "AWS_RESOURCE_ID_REDACTED",
+  "source_mysql_version": "8.0.46-0ubuntuIP_REDACTED",
+  "aws_mysql_version": "8.0.44",
+  "sequence": [
+    "temporary source-role MySQL created synthetic A",
+    "mysqldump restored A into isolated AWS MySQL and A was read back",
+    "AWS MySQL inserted B and A+B were read back",
+    "AWS mysqldump restored A+B into source-role MySQL and both rows were read back"
+  ],
+  "results": {
+    "AWS_MYSQL_FAILOVER": "PASS",
+    "AWS_MYSQL_FAILBACK": "PASS",
+    "DATA_A_B": "PASS",
+    "aws_rows_after_b": ["A", "B"],
+    "source_rows_after_failback": ["A", "B"],
+    "elapsed_seconds": 60.3,
+    "aws_instance_final_state": "stopped"
+  },
+  "dump_sha256": {
+    "failover": "9f299f496a9b50eb6881c756257ae3dba86cb2f997cde887cdaf990d067bc971",
+    "failback": "5fd04ad7dc1c289b8e714cccfe3fe188a045191c1567e97f2454f735311ba5cf"
+  }
+}

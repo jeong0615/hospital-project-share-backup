@@ -1,0 +1,21 @@
+# Secrets and runtime material
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules/
+**/__pycache__/
+**/*.py[cod]
+**/*.log
+**/nohup.out
+
+# Archives, dumps, and key material
+**/*.zip
+**/*.tar
+**/*.tar.gz
+**/*.sql
+**/*.dump
+**/*.enc
+**/*.pem
+**/*.key
+**/*.secret
+**/.ssh/

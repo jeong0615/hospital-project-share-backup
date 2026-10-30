@@ -1,0 +1,118 @@
+---
+- name: Ensure the isolated volume mountpoint exists
+  ansible.builtin.file:
+    path: "{{ isolated_volume_mount }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Check whether the expected isolated volume is already mounted there
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ isolated_volume_mount }}"]
+  register: isolated_volume_mounted
+  changed_when: false
+  failed_when: false
+
+- name: Refuse a different filesystem mounted at the isolated volume mountpoint
+  ansible.builtin.assert:
+    that:
+      - isolated_volume_mounted.rc in [0, 1]
+    fail_msg: A different device is mounted at the isolated restore path.
+
+- name: Verify an already-mounted filesystem by EC2 metadata and NVMe volume serial
+  ansible.builtin.command:
+    argv:
+      - python3
+      - /usr/local/sbin/hospital-dr-isolated-restore
+      - verify-volume
+      - --volume-id
+      - "{{ isolated_volume_id }}"
+      - --mountpoint
+      - "{{ isolated_volume_mount }}"
+  when: isolated_volume_mounted.rc == 0
+  changed_when: false
+
+- name: Check for an existing filesystem on the exact EBS serial-matched device
+  ansible.builtin.command:
+    argv: [blkid, -s, TYPE, -o, value, "{{ isolated_volume_device }}"]
+  register: isolated_volume_fs
+  changed_when: false
+  failed_when: false
+  when: isolated_volume_mounted.rc == 1
+
+- name: Read signatures without modifying the serial-matched EBS
+  ansible.builtin.command:
+    argv: [wipefs, --no-act, --output, TYPE, --noheadings, "{{ isolated_volume_device }}"]
+  register: isolated_volume_signatures
+  changed_when: false
+  failed_when: false
+  when: isolated_volume_mounted.rc == 1
+
+- name: Require an empty mountpoint before first formatting/mount
+  ansible.builtin.command:
+    argv: [find, "{{ isolated_volume_mount }}", -mindepth, "1", -maxdepth, "1", -print, -quit]
+  register: isolated_mountpoint_contents
+  changed_when: false
+  when: isolated_volume_mounted.rc == 1
+
+- name: Refuse to cover pre-existing files on the host root filesystem
+  ansible.builtin.assert:
+    that: isolated_mountpoint_contents.stdout | trim == ""
+    fail_msg: The isolated volume mountpoint is not empty; refusing to hide existing data.
+  when: isolated_volume_mounted.rc == 1
+
+- name: Refuse unknown pre-existing filesystems
+  ansible.builtin.assert:
+    that:
+      - isolated_volume_signatures.rc == 0
+      - isolated_volume_fs.stdout | trim in ["", "ext4"]
+      - (isolated_volume_fs.stdout | trim != "") or (isolated_volume_signatures.stdout | trim == "")
+      - (isolated_volume_fs.stdout | trim != "ext4") or (isolated_volume_signatures.stdout_lines | map("trim") | list == ["ext4"])
+    fail_msg: The serial-matched isolated EBS contains an unsupported filesystem; refusing to format it.
+  when: isolated_volume_mounted.rc == 1
+
+- name: Create ext4 only on the exact serial-verified blank isolated EBS
+  ansible.builtin.command:
+    argv: [mkfs.ext4, -F, "{{ isolated_volume_device }}"]
+  register: isolated_volume_format
+  changed_when: true
+  when:
+    - isolated_volume_mounted.rc == 1
+    - isolated_volume_fs.stdout | trim == ""
+
+- name: Read the UUID of the verified isolated filesystem
+  ansible.builtin.command:
+    argv: [blkid, -s, UUID, -o, value, "{{ isolated_volume_device }}"]
+  register: isolated_volume_uuid
+  changed_when: false
+
+- name: Refuse an empty filesystem UUID
+  ansible.builtin.assert:
+    that: isolated_volume_uuid.stdout | trim | length > 0
+    fail_msg: The isolated EBS filesystem UUID could not be verified.
+
+- name: Mount only the serial-verified isolated EBS by UUID
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^UUID={{ isolated_volume_uuid.stdout | trim }}\\s+"
+    line: "UUID={{ isolated_volume_uuid.stdout | trim }} {{ isolated_volume_mount }} ext4 defaults,nofail 0 2"
+    create: false
+
+- name: Mount the isolated EBS using its verified filesystem UUID
+  ansible.builtin.command:
+    argv: [mount, "{{ isolated_volume_mount }}"]
+  when: isolated_volume_mounted.rc == 1
+  changed_when: true
+
+- name: Verify the mounted block device remains the expected AWS volume serial
+  ansible.builtin.command:
+    argv:
+      - python3
+      - /usr/local/sbin/hospital-dr-isolated-restore
+      - verify-volume
+      - --volume-id
+      - "{{ isolated_volume_id }}"
+      - --mountpoint
+      - "{{ isolated_volume_mount }}"
+  changed_when: false

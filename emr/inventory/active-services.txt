@@ -1,0 +1,13 @@
+Service | enabled | observed state
+nginx.service | yes | active
+apache2.service | yes | failed
+openvpn.service | yes | active
+vsftpd.service | yes | active
+wazuh-agent.service | yes | active
+zabbix-agent.service | yes | active
+ssh.service | yes | active
+cron.service | yes | active
+unattended-upgrades.service | yes | active/installed
+
+`hospital_emr` Node/Express process is running from `/home/hoseo/hospital_emr` and listens on TCP 5000; no EMR-specific systemd unit was found.
+Apache is enabled but failed while Nginx owns port 80; do not enable both without checking the port plan.

@@ -1,0 +1,17 @@
+Included source projects:
+/home/hoseo/hospital_emr -> emr/rootfs/home/hoseo/hospital_emr
+/home/hoseo/doctor_web -> emr/rootfs/home/hoseo/doctor_web
+
+hospital_emr includes the current source tree, package.json, package-lock.json, frontend assets, and backend modules.
+doctor_web includes app.py and templates/index.html. The older app (1try).py copy was excluded.
+
+Excluded from both source projects:
+node_modules/
+.env and .env.*
+nohup.out and runtime logs
+.git/
+
+Sanitized backup differences:
+backend/db.js uses DB_PASSWORD without a hardcoded fallback.
+backend/auth.js uses EMR_TEST_ACCOUNT_PASSWORD for the optional test-account path.
+doctor_web/app.py uses DB_PASSWORD instead of the source hardcoded DB password.

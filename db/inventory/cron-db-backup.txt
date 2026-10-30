@@ -1,0 +1,7 @@
+# User crontab entry observed on 2026-10-08:
+0 4 * * * /home/hoseo/db_backup.sh >> /home/hoseo/db_backup.log 2>&1
+
+# The referenced /home/hoseo/db_backup.sh was not present during inspection.
+# Do not restore this stale cron entry blindly.
+# Active backup automation is hospital-db-backup.timer, which calls:
+# /home/hoseo/scripts/db_backup.sh

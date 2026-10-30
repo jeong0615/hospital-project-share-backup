@@ -1,0 +1,15 @@
+.env
+.env.*
+node_modules
+npm-debug.log*
+*.log
+*.sql
+firebase_backup.json
+cloudflared-*.deb
+.git
+.gitignore
+Dockerfile
+docker-compose*.yml
+test-*.js
+*.pem
+*.key

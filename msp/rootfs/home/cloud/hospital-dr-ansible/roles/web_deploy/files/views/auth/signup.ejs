@@ -1,0 +1,32 @@
+<%- include('../partials/header') %>
+<div class="form-page narrow">
+  <h1>회원가입</h1>
+  <% if (error) { %><div class="alert error"><%= error %></div><% } %>
+  <% if (success) { %><div class="alert success"><%= success %></div><% } %>
+  <form class="form-card compact" method="POST" action="/signup">
+    <label>아이디
+      <input type="text" name="login_id" required>
+    </label>
+    <label>비밀번호
+      <input type="password" name="password" required>
+    </label>
+    <label>이름
+      <input type="text" name="name" required>
+    </label>
+    <label>생년월일
+      <input type="date" name="birth_date" required>
+    </label>
+    <label>성별
+      <select name="gender" required>
+        <option value="M">남</option>
+        <option value="F">여</option>
+      </select>
+    </label>
+    <label>전화번호
+      <input type="text" name="phone">
+    </label>
+    <input type="hidden" name="role" value="PA">
+    <button class="solid-btn" type="submit">회원가입</button>
+  </form>
+</div>
+<%- include('../partials/footer') %>

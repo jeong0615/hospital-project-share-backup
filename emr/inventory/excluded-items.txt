@@ -1,0 +1,14 @@
+/home/hoseo/hospital_emr/.env
+/home/hoseo/hospital_emr/node_modules/
+/home/hoseo/hospital_emr/nohup.out
+/home/hoseo/hospital_emr/backend/db (orginal).js
+/home/hoseo/hospital_emr.zip
+/home/hoseo/doctor_web/app (1try).py
+/home/hoseo/.ssh/
+/home/hoseo/.cloudflared/
+/home/hoseo/바탕화면/.env
+/var/ossec/etc/client.keys
+/var/ossec/etc/wpk_root.pem
+TLS/private keys and runtime logs
+
+These are intentionally excluded because they are secrets, private keys, runtime data, archives, or duplicate/legacy copies.

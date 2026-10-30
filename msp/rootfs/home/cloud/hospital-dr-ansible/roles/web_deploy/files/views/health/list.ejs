@@ -1,0 +1,11 @@
+<%- include('../partials/header') %>
+<div class="content-card">
+  <h1><%= title %></h1>
+  <p class="muted">건강정보는 이용안내와 분리된 독립 메뉴입니다.</p>
+  <div class="link-grid">
+    <% items.forEach(item => { %>
+      <a class="link-tile" href="<%= item.url %>"><%= item.label %></a>
+    <% }) %>
+  </div>
+</div>
+<%- include('../partials/footer') %>

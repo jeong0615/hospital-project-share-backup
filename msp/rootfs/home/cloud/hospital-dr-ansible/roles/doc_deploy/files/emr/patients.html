@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>환자 목록 — EMR</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+.filter-row { display:flex; gap:10px; align-items:center; margin-bottom:18px; flex-wrap:wrap; }
+.filter-row .search-wrap { flex:1; min-width:200px; }
+.gender-badge-M { background:rgba(45,124,246,.12); color:#6aabff; border:1px solid rgba(45,124,246,.25); }
+.gender-badge-F { background:rgba(232,99,180,.12); color:#f08ec4; border:1px solid rgba(232,99,180,.25); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div id="sidebar-mount"></div>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-title">환자 목록</div>
+      <a href="patient-register.html" class="btn btn-primary btn-sm">
+        <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        신규 등록
+      </a>
+    </div>
+
+    <div class="content">
+      <div class="card">
+        <div class="filter-row">
+          <div class="search-wrap">
+            <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="searchInput" class="search-input" type="text" placeholder="환자명, 전화번호, ID 검색..." oninput="filterPatients()">
+          </div>
+          <select id="genderFilter" class="form-control" style="width:100px;" onchange="filterPatients()">
+            <option value="">전체 성별</option>
+            <option value="M">남성</option>
+            <option value="F">여성</option>
+          </select>
+          <span class="text-dim text-mono fs-12" id="count-label">총 0명</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>환자 ID</th>
+                <th>성명</th>
+                <th>성별</th>
+                <th>생년월일</th>
+                <th>나이</th>
+                <th>연락처</th>
+                <th>최근 진료일</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="patient-list">
+              <tr><td colspan="8" class="muted" style="text-align:center;padding:32px;">데이터를 불러오는 중...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex items-center justify-between mt-16">
+          <div class="text-dim fs-12 text-mono" id="page-info"></div>
+          <div class="pagination" id="pagination"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js"></script>
+<script src="js/api.js"></script>
+<script src="js/patients.js"></script>
+<script>
+getUser();
+renderSidebar('patients');
+
+const PAGE_SIZE = 8;
+let currentPage = 1;
+let filtered = [];
+let searchTimeout;
+
+// API 연동을 통한 환자 목록 데이터 로드
+async function loadPatients() {
+  const q = document.getElementById('searchInput').value.trim();
+  const g = document.getElementById('genderFilter').value;
+
+  // js/patients.js 에 정의된 함수 호출
+  filtered = await fetchPatientsList(q, g);
+  currentPage = 1;
+  render();
+}
+
+// 검색어 및 필터 변경 시 호출 (디바운싱 적용)
+function filterPatients() {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    loadPatients();
+  }, 300); // 0.3초 대기 후 API 요청
+}
+
+// 화면 렌더링
+function render() {
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const page = filtered.slice(start, start + PAGE_SIZE);
+
+  document.getElementById('count-label').textContent = `총 ${total}명`;
+  document.getElementById('page-info').textContent = `${total > 0 ? start + 1 : 0}–${Math.min(start + PAGE_SIZE, total)} / ${total}`;
+
+  const tbody = document.getElementById('patient-list');
+  if (page.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:32px;">검색 결과가 없습니다.</td></tr>`;
+  } else {
+    tbody.innerHTML = page.map(p => `
+      <tr onclick="window.location.href='patient-detail.html?id=${p.patient_id}'">
+        <td class="mono">P-${String(p.patient_id).padStart(5,'0')}</td>
+        <td class="fw-500">${p.name}</td>
+        <td><span class="badge gender-badge-${p.gender}">${p.gender === 'M' ? '남' : '여'}</span></td>
+        <td class="mono">${p.birth_date}</td>
+        <td class="muted">${age(p.birth_date)}</td>
+        <td class="muted">${p.phone || '—'}</td>
+        <td class="mono">${p.last_visit || '—'}</td>
+        <td>
+          <a href="patient-detail.html?id=${p.patient_id}" class="btn btn-ghost btn-sm" onclick="event.stopPropagation()">상세</a>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  // 페이지네이션 렌더링
+  const pag = document.getElementById('pagination');
+  let pagHtml = `<button class="page-btn" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''}>‹</button>`;
+  for (let i = 1; i <= totalPages; i++) {
+    if (totalPages > 7 && Math.abs(i - currentPage) > 2 && i !== 1 && i !== totalPages) {
+      if (i === 2 || i === totalPages - 1) pagHtml += `<span class="text-dim" style="padding:0 4px;">…</span>`;
+      continue;
+    }
+    pagHtml += `<button class="page-btn ${i===currentPage?'active':''}" onclick="goPage(${i})">${i}</button>`;
+  }
+  pagHtml += `<button class="page-btn" onclick="goPage(${currentPage+1})" ${currentPage===totalPages?'disabled':''}>›</button>`;
+  pag.innerHTML = pagHtml;
+}
+
+// 페이지 이동
+function goPage(p) {
+  const total = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  if (p < 1 || p > total) return;
+  currentPage = p;
+  render();
+}
+
+// 최초 화면 로드 시 환자 목록 불러오기
+loadPatients();
+</script>
+</body>
+</html>

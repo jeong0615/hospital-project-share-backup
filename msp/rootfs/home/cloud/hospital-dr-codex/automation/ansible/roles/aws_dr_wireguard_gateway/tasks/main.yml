@@ -1,0 +1,106 @@
+---
+- name: Keep the optional AWS DR WireGuard path disabled by default
+  ansible.builtin.debug:
+    msg: "AWS_DR_WG_ENABLED is false; no WireGuard package, interface, route, or service is changed."
+  when: not (aws_dr_wg_enabled | bool)
+
+- name: Validate the dedicated gateway contract before any live change
+  ansible.builtin.assert:
+    that:
+      - aws_dr_wg_interface == 'wg-aws-dr'
+      - aws_dr_wg_cidr == 'AWS_PUBLIC_IP_REDACTED/24'
+      - aws_dr_wg_gateway_address == 'AWS_PUBLIC_IP_REDACTED/24'
+      - aws_dr_wg_onprem_address == 'AWS_PUBLIC_IP_REDACTED/32'
+      - aws_dr_wg_listen_port | int == 51821
+      - aws_dr_wg_aws_db_ip == 'AWS_PUBLIC_IP_REDACTED'
+      - aws_dr_wg_expected_vpc_id == 'AWS_RESOURCE_ID_REDACTED'
+      - aws_dr_wg_expected_web_ip == 'AWS_PUBLIC_IP_REDACTED'
+      - aws_dr_wg_endpoint == 'AWS_PUBLIC_IP_REDACTED:51821'
+      - "'wg0' not in aws_dr_wg_interface"
+      - "'10.250.' not in aws_dr_wg_cidr"
+      - "'192.168.200.' not in aws_dr_wg_cidr"
+    fail_msg: "AWS DR WireGuard gateway contract mismatch; refusing live configuration."
+  when: aws_dr_wg_enabled | bool
+
+- name: Install WireGuard tooling only when explicitly enabled
+  ansible.builtin.apt:
+    name: wireguard-tools
+    state: present
+    update_cache: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Verify the gateway private key is supplied outside the repository
+  ansible.builtin.stat:
+    path: "{{ aws_dr_wg_web_private_key_file }}"
+  register: aws_dr_wg_web_private_key_stat
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Verify the On-Prem peer public key is supplied outside the repository
+  ansible.builtin.stat:
+    path: "{{ aws_dr_wg_onprem_public_key_file }}"
+  register: aws_dr_wg_onprem_public_key_stat
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Fail closed when runtime key material is absent
+  ansible.builtin.assert:
+    that:
+      - aws_dr_wg_web_private_key_stat.stat.exists
+      - aws_dr_wg_web_private_key_stat.stat.isreg
+      - aws_dr_wg_onprem_public_key_stat.stat.exists
+      - aws_dr_wg_onprem_public_key_stat.stat.isreg
+    fail_msg: "AWS DR WireGuard key files must be provisioned outside Git before enabling the path."
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Read runtime key material without logging its contents
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop:
+    - { name: web_private, path: "{{ aws_dr_wg_web_private_key_file }}" }
+    - { name: onprem_public, path: "{{ aws_dr_wg_onprem_public_key_file }}" }
+  loop_control:
+    label: "{{ item.name }}"
+  register: aws_dr_wg_gateway_keys
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Ensure the dedicated WireGuard configuration directory exists
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: aws_dr_wg_enabled | bool
+
+- name: Render only the dedicated AWS DR WireGuard interface
+  ansible.builtin.template:
+    src: wg-aws-dr.conf.j2
+    dest: "/etc/wireguard/{{ aws_dr_wg_interface }}.conf"
+    owner: root
+    group: root
+    mode: '0600'
+  vars:
+    aws_dr_wg_web_private_key: "{{ aws_dr_wg_gateway_keys.results[0].content | b64decode | trim }}"
+    aws_dr_wg_onprem_public_key: "{{ aws_dr_wg_gateway_keys.results[1].content | b64decode | trim }}"
+  no_log: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Enable IPv4 forwarding for the gateway
+  ansible.builtin.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    sysctl_set: true
+    reload: true
+  when: aws_dr_wg_enabled | bool
+
+- name: Start only the dedicated AWS DR WireGuard service
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ aws_dr_wg_interface }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: aws_dr_wg_enabled | bool

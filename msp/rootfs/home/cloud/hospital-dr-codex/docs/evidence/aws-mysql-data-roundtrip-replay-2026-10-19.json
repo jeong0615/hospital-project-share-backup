@@ -1,0 +1,50 @@
+{
+  "evidence_recorded_at_kst": "2026-10-19 00:25",
+  "scope": "isolated synthetic AWS MySQL only; not production DR or Node EMR application E2E",
+  "canary_run_id": "snc-20261017-a1",
+  "aws_account_id": "AWS_ACCOUNT_ID_REDACTED",
+  "aws_region": "ap-northeast-2",
+  "aws_instance_id": "AWS_RESOURCE_ID_REDACTED",
+  "vpc_id": "AWS_RESOURCE_ID_REDACTED",
+  "probe_replay_command": "python3 operations/demo/aws_mysql_data_roundtrip.py --confirm-synthetic-mysql-demo --reset-existing-synthetic-db",
+  "mysql": {
+    "source_version": "8.0.46-0ubuntuIP_REDACTED",
+    "aws_version": "8.0.44",
+    "guest_config": "loopback-only bind; mysqlx disabled; autostart disabled",
+    "config_include_issue_fixed": "The AL2023 main config did not include /etc/my.cnf.d, so the existing synthetic bind fragment was ignored. The runner now backs up the original /etc/my.cnf with mode 0600, includes the expected fragment, and validates effective config and live listener before reset.",
+    "listener": "IP_REDACTED:3306"
+  },
+  "sequence": [
+    "verified existing AWS rows were restricted to the expected synthetic A/B dataset before reset",
+    "temporary source-role MySQL created A and mysqldump was restored into AWS MySQL",
+    "AWS MySQL A was read back; B was inserted; A+B were read back",
+    "AWS mysqldump was restored into the source-role MySQL; A+B were read back"
+  ],
+  "results": {
+    "AWS_MYSQL_FAILOVER": "PASS",
+    "AWS_MYSQL_FAILBACK": "PASS",
+    "DATA_A_B": "PASS",
+    "failover_rows": ["A"],
+    "aws_rows_after_b": ["A", "B"],
+    "source_rows_after_failback": ["A", "B"],
+    "elapsed_seconds": 52.1,
+    "aws_instance_final_state_from_runner": "stopped",
+    "aws_instance_final_state_readback": "stopped"
+  },
+  "dump_sha256": {
+    "failover": "9f299f496a9b50eb6881c756257ae3dba86cb2f997cde887cdaf990d067bc971",
+    "failback": "5fd04ad7dc1c289b8e714cccfe3fe188a045191c1567e97f2454f735311ba5cf"
+  },
+  "replay_safety": {
+    "production_instance_or_db_used": false,
+    "public_ip_on_target": false,
+    "non_expected_database_or_data_causes_pre_reset_block": true,
+    "mysql_listener_checked_before_reset": true,
+    "temporary_source_mysql_removed": true,
+    "failed_attempts_before_success": [
+      "Wildcard bind was detected before DB reset because the AL2023 main config did not include the synthetic config fragment.",
+      "After adding the config include, a hard-coded /usr/bin/ss path failed; switched to PATH discovery."
+    ],
+    "prior_a_b_dataset_preserved_until_prechecks_passed": true
+  }
+}

@@ -1,0 +1,9 @@
+[Unit]
+Description=Enable Hospital DR NAT Gateway
+ConditionPathExists=/home/cloud/hospital-dr-terraform/.nat-schedule-enabled
+
+[Service]
+Type=oneshot
+User=cloud
+WorkingDirectory=/home/cloud/hospital-dr-terraform
+ExecStart=/home/cloud/hospital-dr-terraform/nat_gateway_control.sh enable

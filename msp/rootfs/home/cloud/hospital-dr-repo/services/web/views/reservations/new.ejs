@@ -1,0 +1,24 @@
+<%- include('../partials/header') %>
+<div class="form-page">
+  <h1>인터넷 진료예약</h1>
+  <p class="muted">예약번호와 예약 시 설정한 비밀번호를 가진 본인만 글을 다시 확인할 수 있습니다.</p>
+  <% if (error) { %><div class="alert error"><%= error %></div><% } %>
+  <% if (success) { %><div class="alert success"><%= success %> 예약번호: <strong><%= reservationNumber %></strong></div><% } %>
+  <form class="form-card" method="post" action="/reservations/new">
+    <label>환자명<input type="text" name="patient_name" required></label>
+    <label>연락처<input type="text" name="phone" required></label>
+    <label>진료과
+      <select name="department" required>
+        <option value="내과">내과</option>
+        <option value="외과">외과</option>
+        <option value="정형외과">정형외과</option>
+        <option value="소아청소년과">소아청소년과</option>
+      </select>
+    </label>
+    <label>제목<input type="text" name="title" required></label>
+    <label>내용<textarea name="content" rows="6" required></textarea></label>
+    <label>조회 비밀번호<input type="password" name="access_password" required></label>
+    <button class="solid-btn" type="submit">예약글 등록</button>
+  </form>
+</div>
+<%- include('../partials/footer') %>

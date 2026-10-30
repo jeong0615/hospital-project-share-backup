@@ -1,0 +1,46 @@
+name: GitHub Actions Artifact Retention Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_runs:
+        description: "Number of recent completed main runs to protect"
+        required: false
+        default: "20"
+      prune_superseded:
+        description: "Delete selected CI artifacts outside the protected window"
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 3 * * 0"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cleanup expired and superseded artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_RUNS: ${{ inputs.keep_runs || '20' }}
+          PRUNE_SUPERSEDED: ${{ inputs.prune_superseded || 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --repository "${GITHUB_REPOSITORY}"
+            --keep-runs "${KEEP_RUNS}"
+            --delete-expired
+            --delete
+          )
+          if [ "${PRUNE_SUPERSEDED}" = "true" ]; then
+            args+=(--prune-superseded)
+          fi
+          python3 operations/ci/cleanup_github_artifacts.py "${args[@]}"

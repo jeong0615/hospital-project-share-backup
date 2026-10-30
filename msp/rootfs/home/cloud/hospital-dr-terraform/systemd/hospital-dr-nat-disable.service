@@ -1,0 +1,8 @@
+[Unit]
+Description=Disable Hospital DR NAT Gateway
+
+[Service]
+Type=oneshot
+User=cloud
+WorkingDirectory=/home/cloud/hospital-dr-terraform
+ExecStart=/home/cloud/hospital-dr-terraform/nat_gateway_control.sh disable

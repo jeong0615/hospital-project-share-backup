@@ -1,0 +1,15 @@
+---
+# Explicit preparation-only playbook for the On-Prem DB client.
+# It renders only /etc/wireguard/wg-aws-dr.conf. It never starts or enables
+# WireGuard, changes routes, stops the legacy tunnel, or changes MySQL.
+
+- name: Prepare the AWS DR WireGuard client configuration only
+  hosts: onprem_db_wg
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    aws_dr_wg_enabled: true
+    aws_dr_wg_prepare_only: true
+  roles:
+    - aws_dr_wireguard_client

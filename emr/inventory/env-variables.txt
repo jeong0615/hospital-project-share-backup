@@ -1,0 +1,10 @@
+Variable names found in /home/hoseo/hospital_emr/.env; values intentionally excluded:
+PORT
+DB_HOST
+DB_PORT
+DB_USER
+DB_PASSWORD
+DB_NAME
+EMR_TEST_ACCOUNT_PASSWORD (optional backup-template variable; source fallback was removed)
+
+Restore these values through an external Secret store or a locally created .env file.

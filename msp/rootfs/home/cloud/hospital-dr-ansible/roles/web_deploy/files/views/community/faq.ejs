@@ -1,0 +1,11 @@
+<%- include('../partials/header') %>
+<div class="content-card">
+  <h1><%= title %></h1>
+  <% items.forEach(item => { %>
+    <div style="padding:18px 0;border-bottom:1px solid #e6edf5;">
+      <strong>Q. <%= item.q %></strong>
+      <p class="detail-body" style="margin:10px 0 0;">A. <%= item.a %></p>
+    </div>
+  <% }) %>
+</div>
+<%- include('../partials/footer') %>

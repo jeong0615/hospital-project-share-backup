@@ -1,0 +1,108 @@
+# Wazuh 4.8 project contract. This is a desired-state and validation
+# contract, not a credential store and not a replacement for the upstream
+# single-node compose files.
+version: "4.8"
+manager:
+  json_alerts: true
+  indexer_output: true
+  syscheck:
+    enabled: true
+    scan_on_start: true
+    directories:
+      - /etc
+      - /usr/bin
+      - /usr/sbin
+      - /bin
+      - /sbin
+      - /boot
+    role_paths:
+      web:
+        - /etc/nginx
+        - /etc/apache2
+      emr:
+        - /etc/apache2
+        - /etc/mysql
+      db:
+        - /etc/mysql
+  syscollector:
+    enabled: true
+    scan_on_start: true
+    hardware: true
+    os: true
+    network: true
+    packages: true
+    ports: true
+    processes: true
+  sca:
+    enabled: true
+    scan_on_start: true
+  vulnerability_detection:
+    enabled: true
+    index_status: true
+correlation:
+  window_seconds: 900
+  scenarios:
+    - AUTH_AND_FIM
+    - AUTH_AND_VULNERABILITY
+    - AUTH_AND_APPLICATION_CONFIG
+  severity: HIGH
+  active_response: false
+slack:
+  enabled_by_explicit_flag: true
+  dry_run_supported: true
+  dedicated_security_channel_required: true
+  send_low_level_events: false
+  deduplicate_by_incident_id: true
+integration:
+  chatops_endpoint: http://AWS_PUBLIC_IP_REDACTED:5000/wazuh/alert
+  helper: operations/security/wazuh_chatops_integration.py
+  active_response: false
+aws_endpoint:
+  bootstrap: operations/aws/apply_endpoint_security.sh
+  manager: external_msp_endpoint_when_explicitly_enabled
+  transport: tcp
+  enrollment_port: 1515
+  event_port: 1514
+  current_environment:
+    config_available: true
+    live_path_enabled: false
+    status: DISABLED_BY_DESIGN
+    reason: MSP_BEHIND_UNCONTROLLED_UPSTREAM_NAT
+    direct_inbound_required: false
+  enable_flags:
+    zabbix: AWS_ZABBIX_EXTERNAL_PATH_ENABLED
+    wazuh: AWS_WAZUH_EXTERNAL_PATH_ENABLED
+  live_network_block_is_not_pass: true
+  hosts:
+    - name: aws-dr-web
+      role: web
+      fim_paths:
+        - /etc
+        - /etc/ssh
+        - /etc/nginx
+        - /etc/docker
+      docker_event_log: /var/log/hospital-dr/docker-events.json
+    - name: aws-dr-emr
+      role: emr
+      fim_paths:
+        - /etc
+        - /etc/ssh
+        - /etc/apache2
+        - /etc/docker
+      docker_event_log: /var/log/hospital-dr/docker-events.json
+    - name: aws-dr-db
+      role: db
+      fim_paths:
+        - /etc
+        - /etc/ssh
+        - /etc/mysql
+  docker_socket_mount: false
+cloud_security:
+  source: cloudtrail_event_history
+  collector: operations/security/aws_cloudtrail_collector.py
+  index: hospital-aws-cloud-events
+  creates_cloudtrail: false
+  creates_paid_service: false
+  write_identity: hospital_aws_cloudtrail_writer
+  write_role_contract: monitoring/wazuh/aws-cloudtrail-writer-role.json
+  write_secret_file: /home/cloud/hospital-dr-secrets/aws-indexer-writer.env

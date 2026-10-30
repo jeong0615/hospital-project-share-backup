@@ -1,0 +1,24 @@
+ARG ZABBIX_BASE_IMAGE=zabbix/zabbix-server-pgsql:6.0-ubuntu-latest@sha256:1933e59b4eba6ffb1481fbef74b39ada484ce61d673aee5b10815addf1cba45e
+FROM ${ZABBIX_BASE_IMAGE}
+
+# Keep the upstream entrypoint and Zabbix runtime identity; only add the
+# alert-script runtime dependencies missing from the upstream server image.
+USER root
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bash \
+        coreutils \
+        curl \
+        mawk \
+        python3 \
+        ca-certificates; \
+    rm -rf /var/lib/apt/lists/*; \
+    for executable in bash awk tr date sha256sum cksum curl; do \
+        command -v "$executable" >/dev/null; \
+    done; \
+    python3 -c 'import hashlib, hmac, json; assert json.loads("[]") == []'; \
+    test "$(id -u zabbix)" = "1997"
+
+# Match the official Zabbix server image's non-root runtime user.
+USER 1997

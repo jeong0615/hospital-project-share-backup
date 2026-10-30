@@ -1,0 +1,56 @@
+services:
+  web-dr-test:
+    build:
+      context: /opt/hospital-dr/automation/ansible/roles/web_deploy/files
+      dockerfile: Dockerfile
+    image: hospital-dr-web:local-test
+    container_name: hospital-dr-web-test
+    ports:
+      - "IP_REDACTED:3100:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      SERVER_ROLE: ${WEB_SERVER_ROLE:-dr-web-docker-test}
+      DB_HOST: ${WEB_DB_HOST:-IP_REDACTED}
+      DB_PORT: ${WEB_DB_PORT:-3306}
+      DB_USER: ${WEB_DB_USER:-docker-test}
+      DB_PASSWORD: ${WEB_DB_PASSWORD:?WEB_DB_PASSWORD must be set}
+      DB_NAME: ${WEB_DB_NAME:-hospital_db}
+      SESSION_SECRET: ${WEB_SESSION_SECRET:?WEB_SESSION_SECRET must be set}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://IP_REDACTED:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  emr-dr-test:
+    build:
+      context: /opt/hospital-dr/automation/ansible/roles/doc_deploy/files/emr
+      dockerfile: Dockerfile
+    image: hospital-dr-emr:local-test
+    container_name: hospital-dr-emr-test
+    ports:
+      - "IP_REDACTED:3200:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DB_HOST: ${DOC_DB_HOST:-IP_REDACTED}
+      DB_PORT: ${DOC_DB_PORT:-3306}
+      DB_USER: ${DOC_DB_USER:-docker-test}
+      DB_PASSWORD: ${DOC_DB_PASSWORD:?DOC_DB_PASSWORD must be set}
+      DB_NAME: ${DOC_DB_NAME:-hospital_db}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://IP_REDACTED:3000/', r => process.exit(r.statusCode >= 200 && r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

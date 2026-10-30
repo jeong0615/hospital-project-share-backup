@@ -1,0 +1,13 @@
+[Interface]
+Address = {{ aws_dr_wg_gateway_address }}
+ListenPort = {{ aws_dr_wg_listen_port }}
+PrivateKey = {{ aws_dr_wg_web_private_key }}
+SaveConfig = false
+PostUp = iptables -C FORWARD -i %i -o {{ aws_dr_wg_uplink_interface }} -s {{ aws_dr_wg_onprem_address | regex_replace('/32$', '') }} -d {{ aws_dr_wg_aws_db_ip }} -p tcp --sport 3306 -j ACCEPT || iptables -A FORWARD -i %i -o {{ aws_dr_wg_uplink_interface }} -s {{ aws_dr_wg_onprem_address | regex_replace('/32$', '') }} -d {{ aws_dr_wg_aws_db_ip }} -p tcp --sport 3306 -j ACCEPT
+PostUp = iptables -C FORWARD -i {{ aws_dr_wg_uplink_interface }} -o %i -s {{ aws_dr_wg_aws_db_ip }} -d {{ aws_dr_wg_onprem_address | regex_replace('/32$', '') }} -p tcp --dport 3306 -j ACCEPT || iptables -A FORWARD -i {{ aws_dr_wg_uplink_interface }} -o %i -s {{ aws_dr_wg_aws_db_ip }} -d {{ aws_dr_wg_onprem_address | regex_replace('/32$', '') }} -p tcp --dport 3306 -j ACCEPT
+PostDown = iptables -D FORWARD -i %i -o {{ aws_dr_wg_uplink_interface }} -s {{ aws_dr_wg_onprem_address | regex_replace('/32$', '') }} -d {{ aws_dr_wg_aws_db_ip }} -p tcp --sport 3306 -j ACCEPT 2>/dev/null || true
+PostDown = iptables -D FORWARD -i {{ aws_dr_wg_uplink_interface }} -o %i -s {{ aws_dr_wg_aws_db_ip }} -d {{ aws_dr_wg_onprem_address | regex_replace('/32$', '') }} -p tcp --dport 3306 -j ACCEPT 2>/dev/null || true
+
+[Peer]
+PublicKey = {{ aws_dr_wg_onprem_public_key }}
+AllowedIPs = {{ aws_dr_wg_onprem_address }}

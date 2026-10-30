@@ -1,0 +1,63 @@
+<%- include('../partials/header') %>
+
+<div class="form-page">
+  <div class="content-card" style="padding:0; overflow:hidden;">
+    <div style="padding:24px 28px 10px 28px; border-bottom:1px solid #e5e7eb;">
+      <h1 style="margin:0; font-size:32px; font-weight:700; color:#1f2937;">예약 목록</h1>
+      <p class="muted" style="margin:10px 0 0 0;">
+        인터넷 진료예약에 등록된 내역을 최신순으로 확인할 수 있습니다.
+      </p>
+    </div>
+
+    <% if (typeof error !== 'undefined' && error) { %>
+      <div class="alert error" style="margin:24px;"><%= error %></div>
+    <% } %>
+
+    <div style="padding:0 0 6px 0;">
+      <table style="width:100%; border-collapse:collapse; table-layout:fixed;">
+        <thead>
+          <tr style="border-top:2px solid #1f2937; border-bottom:1px solid #d1d5db; background:#fafafa;">
+            <th style="padding:28px 18px; text-align:center; font-size:18px; font-weight:600; color:#1f2937; width:12%;">번호</th>
+            <th style="padding:28px 18px; text-align:center; font-size:18px; font-weight:600; color:#1f2937; width:18%;">진료과</th>
+            <th style="padding:28px 18px; text-align:left; font-size:18px; font-weight:600; color:#1f2937; width:38%;">예약 제목</th>
+            <th style="padding:28px 18px; text-align:center; font-size:18px; font-weight:600; color:#1f2937; width:16%;">작성자</th>
+            <th style="padding:28px 18px; text-align:center; font-size:18px; font-weight:600; color:#1f2937; width:16%;">작성일</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (reservations && reservations.length > 0) { %>
+            <% reservations.forEach(function(item) { %>
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:28px 18px; text-align:center; font-size:17px; color:#1f2937;">
+                  <%= item.reservation_id %>
+                </td>
+                <td style="padding:28px 18px; text-align:center; font-size:17px; color:#374151;">
+                  <%= item.department %>
+                </td>
+                <td style="padding:28px 18px; text-align:left; font-size:17px; color:#111827;">
+                  <a href="/reservations/check" style="color:#111827; text-decoration:none; font-weight:500;">
+                    <%= item.title %>
+                  </a>
+                </td>
+                <td style="padding:28px 18px; text-align:center; font-size:17px; color:#1f2937;">
+                  <%= item.patient_name %>
+                </td>
+                <td style="padding:28px 18px; text-align:center; font-size:17px; color:#1f2937;">
+                  <%= new Date(item.created_at).toISOString().slice(0, 10).replace(/-/g, '.') %>
+                </td>
+              </tr>
+            <% }) %>
+          <% } else { %>
+            <tr>
+              <td colspan="5" style="padding:48px 18px; text-align:center; color:#6b7280; font-size:17px;">
+                등록된 예약 내역이 없습니다.
+              </td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>

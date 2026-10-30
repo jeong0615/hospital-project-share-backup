@@ -1,0 +1,30 @@
+[Unit]
+Description=Hospital DR environment lifecycle tied to the local controller
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=cloud
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=DR_REPO_ROOT=/home/cloud/hospital-dr-codex
+Environment=DR_TERRAFORM_DIR=/home/cloud/hospital-dr-terraform
+Environment=DR_OPERATIONS_DIR=/home/cloud/hospital-dr-codex/operations
+Environment=DR_SECRET_FILE=/home/cloud/hospital-dr-secrets/dr.env
+# Explicitly identifies this unit's automatic start.  Do not use the generic
+# systemd INVOCATION_ID because ChatOps child workflows inherit it.
+Environment=DR_ENVIRONMENT_SYSTEMD_AUTOSTART=true
+StateDirectory=hospital-dr
+StateDirectoryMode=0750
+WorkingDirectory=/home/cloud/hospital-dr-codex
+RemainAfterExit=yes
+ExecStart=/home/cloud/hospital-dr-codex/operations/finops/dr_environment_control.sh start
+ExecStop=/home/cloud/hospital-dr-codex/operations/finops/dr_environment_control.sh stop
+TimeoutStartSec=20min
+TimeoutStopSec=20min
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

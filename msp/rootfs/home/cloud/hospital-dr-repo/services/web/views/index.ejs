@@ -1,0 +1,55 @@
+<%- include('partials/header') %>
+<div class="hero-grid">
+  <section class="hero-card blue">
+    <h2>진료안내</h2>
+    <p>외래 진료, 접수 절차, 준비서류, 예약 및 수납 절차를 쉽고 빠르게 확인하세요.</p>
+    <div class="button-row">
+      <a class="outline-btn" href="/guide/medical">자세히 보기</a>
+      <a class="outline-btn" href="/reservations/new">진료예약</a>
+    </div>
+  </section>
+  <section class="hero-card indigo">
+    <h2>이용안내</h2>
+    <p>오시는 길, 원내 위치도, 진료과 안내, 증명서 발급 등 내원에 필요한 정보를 제공합니다.</p>
+    <div class="button-row">
+      <a class="outline-btn" href="/guide/usage">이용안내 보기</a>
+    </div>
+  </section>
+  <section class="hero-card teal">
+    <h2>건강정보</h2>
+    <p>계절별 건강관리, 예방접종, 생활 습관 개선, 만성질환 관리 정보를 확인할 수 있습니다.</p>
+    <div class="button-row">
+      <a class="outline-btn" href="/health-info">건강정보 보기</a>
+    </div>
+  </section>
+  <aside class="login-panel">
+    <h2>환자서비스</h2>
+    <p>회원가입 후 본인 정보와 본인 진료기록만 확인할 수 있습니다. 타인의 개인정보는 열람할 수 없습니다.</p>
+    <a class="solid-btn" href="/login">로그인</a>
+    <a class="ghost-btn" href="/signup">회원가입</a>
+    <a class="ghost-btn" href="/reservations/check">예약확인</a>
+  </aside>
+</div>
+<div class="lower-grid">
+  <section class="doctor-panel">
+    <h2>주요 의료진</h2>
+    <div class="doctor-list">
+      <% if (doctors.length) { %>
+        <% doctors.forEach(doc => { %>
+          <div class="doctor-item"><strong><%= doc.name %></strong><span><%= doc.department %></span></div>
+        <% }) %>
+      <% } else { %>
+        <p class="muted">의료진 데이터가 아직 등록되지 않았습니다.</p>
+      <% } %>
+    </div>
+  </section>
+  <section class="notice-panel">
+    <h2>공지사항</h2>
+    <ul>
+      <% notices.forEach(item => { %>
+        <li><span><%= item.title %></span><em><%= item.date %></em></li>
+      <% }) %>
+    </ul>
+  </section>
+</div>
+<%- include('partials/footer') %>

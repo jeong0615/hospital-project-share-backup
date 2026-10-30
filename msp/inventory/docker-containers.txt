@@ -1,0 +1,2 @@
+# docker ps -a (name, image, status only)
+# command unavailable or failed on this host

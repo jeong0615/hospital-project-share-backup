@@ -1,0 +1,67 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "HospitalDRLambdaManageCostGuard",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:AddPermission",
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetPolicy",
+        "lambda:ListTags",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "Resource": "AWS_ARN_REDACTED"
+    },
+    {
+      "Sid": "HospitalDREventBridgeManageCostGuardSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:ListTagsForResource",
+        "events:ListTargetsByRule",
+        "events:PutRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:TagResource",
+        "events:UntagResource"
+      ],
+      "Resource": [
+        "AWS_ARN_REDACTED",
+        "AWS_ARN_REDACTED"
+      ]
+    },
+    {
+      "Sid": "HospitalDRCloudWatchLogsRead",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "HospitalDRCloudWatchLogsManageCostGuardLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": [
+        "AWS_ARN_REDACTED",
+        "AWS_ARN_REDACTED"
+      ]
+    }
+  ]
+}

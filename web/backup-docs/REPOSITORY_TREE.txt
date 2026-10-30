@@ -1,0 +1,161 @@
+hospital-github-backup/
+├─ cloudflare/
+│  ├─ DNS.md
+│  ├─ FAILOVER_FAILBACK.md
+│  └─ README.md
+├─ docs/
+│  ├─ ARCHITECTURE.md
+│  ├─ CLOUDFLARE.md
+│  ├─ COLLECTED_FILES.md
+│  ├─ CONFLICT_REPORT.md
+│  ├─ EXCLUDED_FILES.md
+│  ├─ FAILOVER_FAILBACK.md
+│  ├─ FINAL_REPORT.md
+│  ├─ INVENTORY.md
+│  ├─ MISSING_ITEMS.md
+│  ├─ MONITORING.md
+│  ├─ NETWORK_INTEGRATION.md
+│  ├─ NGINX.md
+│  ├─ RECOVERY.md
+│  ├─ REPOSITORY_TREE.txt
+│  ├─ SECRET_SCAN.md
+│  ├─ TEST_RESULTS.md
+│  └─ WEB_SETUP.md
+├─ dr/
+│  ├─ README.md
+│  └─ environment.example
+├─ monitoring/
+│  └─ zabbix-agent/
+│     └─ README.md
+├─ network/
+│  ├─ gns3/
+│  │  └─ README.md
+│  ├─ physical/
+│  │  ├─ cisco-2800/
+│  │  │  └─ README.md
+│  │  ├─ cisco-2950/
+│  │  │  └─ README.md
+│  │  ├─ cisco-3550/
+│  │  │  └─ README.md
+│  │  ├─ cisco-3560/
+│  │  │  └─ README.md
+│  │  └─ README.md
+│  ├─ ACL_POLICY.md
+│  ├─ NETWORK_TOPOLOGY.md
+│  └─ PORT_MAP.md
+├─ web/
+│  ├─ app/
+│  │  ├─ public/
+│  │  │  ├─ css/
+│  │  │  │  └─ style.css
+│  │  │  ├─ js/
+│  │  │  │  └─ menu.js
+│  │  │  └─ 404.html
+│  │  ├─ routes/
+│  │  │  └─ check.js
+│  │  ├─ sql/
+│  │  │  ├─ reservation_posts.sql
+│  │  │  └─ sample_data.sql
+│  │  ├─ views/
+│  │  │  ├─ auth/
+│  │  │  │  ├─ forbidden.ejs
+│  │  │  │  ├─ login.ejs
+│  │  │  │  ├─ mypage.ejs
+│  │  │  │  └─ signup.ejs
+│  │  │  ├─ community/
+│  │  │  │  ├─ faq.ejs
+│  │  │  │  ├─ index.ejs
+│  │  │  │  └─ notices.ejs
+│  │  │  ├─ health/
+│  │  │  │  └─ list.ejs
+│  │  │  ├─ pages/
+│  │  │  │  ├─ detail.ejs
+│  │  │  │  ├─ list.ejs
+│  │  │  │  └─ not-found.ejs
+│  │  │  ├─ partials/
+│  │  │  │  ├─ footer.ejs
+│  │  │  │  └─ header.ejs
+│  │  │  ├─ reservations/
+│  │  │  │  ├─ check.ejs
+│  │  │  │  ├─ list.ejs
+│  │  │  │  └─ new.ejs
+│  │  │  └─ index.ejs
+│  │  ├─ .gitignore
+│  │  ├─ app.js
+│  │  ├─ package-lock.json
+│  │  ├─ package.json
+│  │  └─ test-db.js
+│  ├─ configs/
+│  │  ├─ cloudflared/
+│  │  │  └─ config.yml.example
+│  │  ├─ netplan/
+│  │  │  └─ README.md
+│  │  ├─ nginx/
+│  │  │  ├─ active/
+│  │  │  │  ├─ modules-enabled/
+│  │  │  │  │  ├─ 50-mod-http-geoip2.conf
+│  │  │  │  │  ├─ 50-mod-http-image-filter.conf
+│  │  │  │  │  ├─ 50-mod-http-xslt-filter.conf
+│  │  │  │  │  ├─ 50-mod-mail.conf
+│  │  │  │  │  ├─ 50-mod-stream.conf
+│  │  │  │  │  └─ 70-mod-stream-geoip2.conf
+│  │  │  │  └─ sites-enabled/
+│  │  │  │     ├─ hospital
+│  │  │  │     └─ hospital.bak_20260625_123126
+│  │  │  ├─ inactive/
+│  │  │  │  └─ default
+│  │  │  ├─ mime.types
+│  │  │  └─ nginx.conf
+│  │  ├─ systemd/
+│  │  │  ├─ cloudflared.service
+│  │  │  ├─ hospital-web.service
+│  │  │  ├─ nginx.service
+│  │  │  └─ zabbix-agent.service
+│  │  └─ zabbix-agent/
+│  │     └─ zabbix_agentd.conf
+│  ├─ docs/
+│  │  ├─ legacy/
+│  │  │  ├─ .firebaserc
+│  │  │  ├─ README.md
+│  │  │  ├─ firebase_backup.json
+│  │  │  └─ 배포_및_실행_설명.txt
+│  │  ├─ APPLICATION.md
+│  │  ├─ ENVIRONMENT.md
+│  │  └─ SYSTEMD.md
+│  ├─ inventory/
+│  │  ├─ SUMMARY.json
+│  │  ├─ VALIDATION.json
+│  │  ├─ backup-sha256.txt
+│  │  ├─ cloudflared-path-version.txt
+│  │  ├─ cloudflared-service-version.txt
+│  │  ├─ collection-state.json
+│  │  ├─ dns.txt
+│  │  ├─ final-secret-scan.json
+│  │  ├─ gitleaks-available.txt
+│  │  ├─ hostname.txt
+│  │  ├─ kernel.txt
+│  │  ├─ listeners.txt
+│  │  ├─ network-addresses.txt
+│  │  ├─ network-routes.txt
+│  │  ├─ network-rules.txt
+│  │  ├─ nginx-T.txt
+│  │  ├─ nginx-version.txt
+│  │  ├─ node.txt
+│  │  ├─ npm.txt
+│  │  ├─ os.txt
+│  │  ├─ processes.txt
+│  │  ├─ raw-packages.txt
+│  │  ├─ secret-findings.json
+│  │  ├─ secret-keyword-locations.json
+│  │  ├─ service-summary.txt
+│  │  ├─ verification.json
+│  │  └─ zabbix-version.txt
+│  ├─ scripts/
+│  │  ├─ README.md
+│  │  ├─ check-prerequisites.sh
+│  │  ├─ deploy-web.sh
+│  │  ├─ health-check.sh
+│  │  └─ verify-services.sh
+│  └─ .env.example
+├─ .gitignore
+└─ README.md

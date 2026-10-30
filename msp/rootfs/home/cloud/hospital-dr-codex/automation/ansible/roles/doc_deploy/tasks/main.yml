@@ -1,0 +1,312 @@
+---
+- name: "Initialize DR EMR deployment variables / DR EMR 배포 변수 초기화"
+  set_fact:
+    emr_app_dir: "/etc/hospital-dr"
+    emr_image_tag: "{{ lookup('env', 'DR_IMAGE_TAG') | default('', true) }}"
+    emr_ecr_region: "{{ lookup('env', 'ECR_REGION') | default(lookup('env', 'AWS_REGION') | default('ap-northeast-2', true), true) }}"
+    emr_ecr_registry: "{{ lookup('env', 'ECR_REGISTRY') | default('', true) }}"
+    emr_ecr_account_id: "{{ lookup('env', 'ECR_ACCOUNT_ID') | default('', true) }}"
+    emr_ecr_repository: "{{ lookup('env', 'ECR_EMR_REPOSITORY') | default('hospital-dr-emr', true) }}"
+    emr_container_name: "hospital-dr-emr"
+
+- name: "Resolve the EMR application DB endpoint independently of SSH inventory / SSH inventory와 분리된 EMR DB endpoint 확인"
+  command:
+    argv:
+      - python3
+      - "{{ lookup('env', 'DR_DB_SERVICE_VALIDATOR') | default(playbook_dir ~ '/../../operations/db/db_service_endpoint.py', true) }}"
+      - --application
+      - emr
+  delegate_to: localhost
+  become: false
+  register: emr_db_endpoint_result
+  changed_when: false
+
+- name: "Set the validated EMR DB endpoint / 검증된 EMR DB endpoint 설정"
+  set_fact:
+    emr_db_host: "{{ emr_db_endpoint_result.stdout_lines[0] }}"
+    emr_db_port: "{{ emr_db_endpoint_result.stdout_lines[1] }}"
+
+- name: "Validate required EMR runtime secrets / EMR runtime secret 검증"
+  assert:
+    that:
+      - lookup('env', 'DOC_DB_PASSWORD') | length > 0
+    fail_msg: "DOC_DB_PASSWORD must be supplied through the external controller environment."
+  no_log: true
+
+- name: "Validate immutable DR EMR image contract / DR EMR immutable image 계약 검증"
+  assert:
+    that:
+      - emr_image_tag is match('^[0-9a-fA-F]{40}$')
+    fail_msg: "DR_IMAGE_TAG must be a 40-character commit SHA; mutable tags such as latest are not accepted."
+
+- name: "Install Docker and Apache reverse-proxy packages / Docker 및 Apache reverse proxy 패키지 설치"
+  apt:
+    name:
+      - apache2
+      - awscli
+      - ca-certificates
+      - curl
+      - docker.io
+      - iproute2
+    state: present
+    update_cache: yes
+
+- name: "Enable and start Docker / Docker 서비스 활성화 및 시작"
+  service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: "Resolve ECR account from the instance role / 인스턴스 role에서 ECR 계정 확인"
+  command: aws sts get-caller-identity --query Account --output text
+  register: emr_ecr_identity
+  changed_when: false
+  when:
+    - emr_ecr_registry | length == 0
+    - emr_ecr_account_id | length == 0
+
+- name: "Set ECR account from instance identity / 인스턴스 identity로 ECR 계정 설정"
+  set_fact:
+    emr_ecr_account_id: "{{ emr_ecr_identity.stdout | trim }}"
+  when:
+    - emr_ecr_registry | length == 0
+    - emr_ecr_account_id | length == 0
+
+- name: "Build ECR registry endpoint / ECR registry endpoint 구성"
+  set_fact:
+    emr_ecr_registry: "{{ emr_ecr_account_id }}.dkr.ecr.{{ emr_ecr_region }}.amazonaws.com"
+  when: emr_ecr_registry | length == 0
+
+- name: "Validate ECR registry contract / ECR registry 계약 검증"
+  assert:
+    that:
+      - emr_ecr_registry is match('^[0-9]+\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com$')
+    fail_msg: "ECR_REGISTRY or the instance role account could not produce a valid ECR registry endpoint."
+
+- name: "Set immutable DR EMR image reference / immutable DR EMR image 참조 설정"
+  set_fact:
+    emr_image_ref: "{{ emr_ecr_registry }}/{{ emr_ecr_repository }}:{{ emr_image_tag }}"
+
+- name: "Disable legacy PM2 startup unit / 구형 PM2 부팅 unit 비활성화"
+  shell: |
+    set -eu
+    unit=pm2-ubuntu.service
+    if ! systemctl cat "$unit" >/dev/null 2>&1; then
+      echo state=unchanged
+      exit 0
+    fi
+    enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+    active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    if [ "$enabled" = "enabled" ] && [ "$active" = "active" ]; then
+      systemctl disable --now pm2-ubuntu.service
+      echo state=changed
+    elif [ "$active" = "active" ]; then
+      systemctl stop "$unit"
+      echo state=changed
+    elif [ "$enabled" = "enabled" ]; then
+      systemctl disable "$unit"
+      echo state=changed
+    else
+      echo state=unchanged
+    fi
+  args:
+    executable: /bin/bash
+  register: emr_pm2_unit
+  changed_when: "'state=changed' in emr_pm2_unit.stdout"
+  failed_when: emr_pm2_unit.rc != 0
+
+- name: "Remove only the legacy Hospital EMR PM2 process / 구형 Hospital EMR PM2 프로세스만 제거"
+  shell: |
+    if command -v pm2 >/dev/null 2>&1; then
+      pm2 delete hospital-emr >/dev/null 2>&1 || true
+      pm2 save >/dev/null 2>&1 || true
+    fi
+  become_user: ubuntu
+  changed_when: false
+
+- name: "Create external EMR runtime directory / 외부 EMR runtime 디렉토리 생성"
+  file:
+    path: "{{ emr_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: "Render EMR runtime environment without exposing secrets / secret 비노출 EMR runtime 환경 생성"
+  copy:
+    dest: "{{ emr_app_dir }}/hospital-dr-emr.env"
+    content: |
+      NODE_ENV=production
+      PORT=3000
+      DB_HOST={{ emr_db_host }}
+      DB_PORT={{ emr_db_port }}
+      DB_USER={{ lookup('env', 'DOC_DB_USER') | default('root', true) }}
+      DB_PASSWORD={{ lookup('env', 'DOC_DB_PASSWORD') }}
+      DB_NAME={{ lookup('env', 'DOC_DB_NAME') | default('hospital_db', true) }}
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  register: emr_env_file
+
+- name: "Authenticate Docker to ECR using the instance role / 인스턴스 role로 ECR 인증"
+  shell: |
+    set -o pipefail
+    aws ecr get-login-password --region "{{ emr_ecr_region }}" | \
+      docker login --username AWS --password-stdin "{{ emr_ecr_registry }}"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  no_log: true
+
+- name: "Pull the immutable EMR image / immutable EMR image pull"
+  command: docker pull "{{ emr_image_ref }}"
+  changed_when: false
+
+- name: "Inspect existing EMR container without logging its environment / 기존 EMR container 환경 비노출 검사"
+  command: docker inspect --format '{% raw %}{{.Config.Image}}|{{.HostConfig.RestartPolicy.Name}}|{{.State.Running}}{% endraw %}' "{{ emr_container_name }}"
+  register: emr_container_inspect
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "Decode existing EMR container metadata / 기존 EMR container metadata 해석"
+  set_fact:
+    emr_container_image: "{{ emr_container_inspect.stdout.split('|')[0] | trim }}"
+    emr_container_restart_policy: "{{ emr_container_inspect.stdout.split('|')[1] | trim }}"
+    emr_container_running: "{{ emr_container_inspect.stdout.split('|')[2] | trim }}"
+  when: emr_container_inspect.rc == 0
+  no_log: true
+
+- name: "Remove EMR container when image, env, or restart policy drifted / EMR container drift 제거"
+  command: docker rm -f "{{ emr_container_name }}"
+  register: emr_container_removed
+  when:
+    - emr_container_inspect.rc == 0
+    - emr_env_file.changed or emr_container_image != emr_image_ref or emr_container_restart_policy != 'unless-stopped'
+
+- name: "Check EMR host port before creating the container / EMR host port 충돌 검사"
+  command: ss -ltnH 'sport = :3000'
+  register: emr_port_check
+  changed_when: false
+  failed_when: false
+  when:
+    - emr_container_inspect.rc != 0 or (emr_container_removed is defined and emr_container_removed.changed)
+
+- name: "Require the EMR application port to be available / EMR application port 사용 가능 요구"
+  assert:
+    that:
+      - emr_port_check.stdout | trim == ''
+    fail_msg: "TCP port 3000 is already occupied by an unmanaged host process."
+  when:
+    - emr_container_inspect.rc != 0 or (emr_container_removed is defined and emr_container_removed.changed)
+
+- name: "Run EMR container with persistent restart policy / EMR container 실행"
+  shell: >-
+    docker run --detach
+    --name "{{ emr_container_name }}"
+    --restart unless-stopped
+    --publish IP_REDACTED:3000:3000
+    --env-file "{{ emr_app_dir }}/hospital-dr-emr.env"
+    "{{ emr_image_ref }}"
+  when:
+    - emr_container_inspect.rc != 0 or (emr_container_removed is defined and emr_container_removed.changed)
+
+- name: "Start an existing stopped EMR container / 중지된 기존 EMR container 시작"
+  command: docker start "{{ emr_container_name }}"
+  when:
+    - emr_container_inspect.rc == 0
+    - emr_container_removed is not defined or not emr_container_removed.changed
+    - (emr_container_running | string | lower) != 'true'
+
+- name: "Wait for the EMR container healthcheck / EMR container healthcheck 대기"
+  shell: |
+    set -euo pipefail
+    for attempt in $(seq 1 30); do
+      health="$(docker inspect --format '{% raw %}{{.State.Health.Status}}{% endraw %}' "{{ emr_container_name }}" 2>/dev/null || true)"
+      if [ "$health" = "healthy" ]; then
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "EMR container did not become healthy."
+    docker inspect --format '{% raw %}{{.State.Health.Status}}{% endraw %}' "{{ emr_container_name }}"
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "Verify EMR application can read the DR database / EMR 애플리케이션 DB read 검증"
+  uri:
+    url: http://IP_REDACTED:3000/api/patients
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: emr_database_read
+  retries: 12
+  delay: 5
+  until: emr_database_read.status == 200
+
+- name: "Enable Apache proxy modules / Apache proxy 모듈 활성화"
+  command: a2enmod proxy proxy_http headers rewrite
+  register: emr_apache_modules
+  changed_when: "'Enabling module' in emr_apache_modules.stdout"
+
+- name: "Configure Apache reverse proxy for EMR / EMR Apache reverse proxy 구성"
+  copy:
+    dest: /etc/apache2/sites-available/hospital-emr.conf
+    content: |
+      <VirtualHost *:80>
+          ServerName hospital-emr.local
+          ProxyPreserveHost On
+          ProxyPass / http://IP_REDACTED:3000/
+          ProxyPassReverse / http://IP_REDACTED:3000/
+          ErrorLog ${APACHE_LOG_DIR}/hospital-emr-error.log
+          CustomLog ${APACHE_LOG_DIR}/hospital-emr-access.log combined
+      </VirtualHost>
+    owner: root
+    group: root
+    mode: '0644'
+  register: emr_apache_config
+
+- name: "Enable Apache EMR site and disable default site / Apache EMR site 활성화"
+  command: a2ensite hospital-emr.conf
+  register: emr_apache_site
+  changed_when: "'Enabling site' in emr_apache_site.stdout"
+
+- name: "Disable Apache default site / Apache 기본 site 비활성화"
+  command: a2dissite 000-default.conf
+  register: emr_default_site
+  changed_when: "'Disabling site' in emr_default_site.stdout"
+  failed_when: emr_default_site.rc not in [0, 1]
+
+- name: "Validate Apache configuration / Apache 설정 검증"
+  command: apache2ctl configtest
+  changed_when: false
+
+- name: "Enable and start Apache / Apache 활성화 및 시작"
+  service:
+    name: apache2
+    state: started
+    enabled: yes
+
+- name: "Reload Apache after an actual configuration change / 실제 설정 변경 시 Apache reload"
+  service:
+    name: apache2
+    state: reloaded
+  when:
+    - (emr_apache_modules.changed | default(false)) or
+      (emr_apache_config.changed | default(false)) or
+      (emr_apache_site.changed | default(false)) or
+      (emr_default_site.changed | default(false))
+
+- name: "Verify Apache reverse proxy health / Apache reverse proxy health 검증"
+  uri:
+    url: http://IP_REDACTED/
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: emr_apache_health
+  retries: 12
+  delay: 5
+  until: emr_apache_health.status == 200

@@ -1,0 +1,41 @@
+---
+- name: "Bootstrap the Ansible Python runtime / Ansible Python runtime 부트스트랩"
+  hosts: all
+  become: yes
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: "Ensure Python 3 and python3-apt exist before using Ansible modules / Ansible 모듈 실행 전 Python 3 및 python3-apt 설치"
+      raw: |
+        set -eu
+        if command -v python3 >/dev/null 2>&1 && python3 -c 'import apt' >/dev/null 2>&1; then
+          echo state=unchanged
+          exit 0
+        fi
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install --yes python3 python3-apt
+        echo state=changed
+      register: ansible_python_bootstrap
+      changed_when: "'state=changed' in ansible_python_bootstrap.stdout"
+
+- name: "Restore and configure DR database tier / DR 데이터베이스 계층 복구 및 구성"
+  hosts: db_servers
+  become: yes
+  any_errors_fatal: true
+  roles:
+    - db_recovery
+
+- name: "Configure and deploy DR document tier / DR 문서 계층 구성 및 배포"
+  hosts: doc_servers
+  become: yes
+  any_errors_fatal: true
+  roles:
+    - doc_deploy
+
+- name: "Configure and deploy DR web tier / DR Web 계층 구성 및 배포"
+  hosts: web_servers
+  become: yes
+  any_errors_fatal: true
+  roles:
+    - web_deploy

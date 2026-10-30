@@ -1,0 +1,48 @@
+---
+- name: Record the applied sysctl file hash and metadata
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_sysctl_file }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_applied_sysctl
+
+- name: Record the applied NAT controller hash and metadata
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_script }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_applied_controller
+
+- name: Record the applied systemd unit hash and metadata
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ aws_web_nat_instance_service }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_applied_service
+
+- name: Bind the applied file versions to the baseline transaction
+  ansible.builtin.set_fact:
+    aws_web_nat_instance_baseline: >-
+      {{ aws_web_nat_instance_baseline | combine({
+        'applied': {
+          'ip_forward': '1',
+          'files': {
+            'sysctl': {'sha256': aws_web_nat_instance_applied_sysctl.stat.checksum, 'mode': aws_web_nat_instance_applied_sysctl.stat.mode, 'uid': aws_web_nat_instance_applied_sysctl.stat.uid, 'gid': aws_web_nat_instance_applied_sysctl.stat.gid},
+            'controller': {'sha256': aws_web_nat_instance_applied_controller.stat.checksum, 'mode': aws_web_nat_instance_applied_controller.stat.mode, 'uid': aws_web_nat_instance_applied_controller.stat.uid, 'gid': aws_web_nat_instance_applied_controller.stat.gid},
+            'service': {'sha256': aws_web_nat_instance_applied_service.stat.checksum, 'mode': aws_web_nat_instance_applied_service.stat.mode, 'uid': aws_web_nat_instance_applied_service.stat.uid, 'gid': aws_web_nat_instance_applied_service.stat.gid}
+          }
+        }
+      }, recursive=True) }}
+  no_log: true
+
+- name: Persist applied hashes for drift-safe rollback
+  ansible.builtin.copy:
+    content: "{{ aws_web_nat_instance_baseline | to_nice_json }}\n"
+    dest: "{{ aws_web_nat_instance_baseline_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true

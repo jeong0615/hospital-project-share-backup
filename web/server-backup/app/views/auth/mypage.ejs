@@ -1,0 +1,36 @@
+<%- include('../partials/header') %>
+<div class="content-card">
+  <h1>마이페이지</h1>
+  <p class="muted">로그인한 환자 본인 정보만 표시됩니다.</p>
+  <div class="table-wrap">
+    <table>
+      <tr><th>이름</th><td><%= patient ? patient.name : '-' %></td></tr>
+      <tr><th>생년월일</th><td><%= patient ? patient.birth_date : '-' %></td></tr>
+      <tr><th>성별</th><td><%= patient ? patient.gender : '-' %></td></tr>
+      <tr><th>연락처</th><td><%= patient ? patient.phone : '-' %></td></tr>
+    </table>
+  </div>
+  <h2 style="margin-top:32px;">내 진료기록</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>진료일시</th><th>담당의</th><th>진료과</th><th>진단내용</th></tr>
+      </thead>
+      <tbody>
+        <% if (records.length) { %>
+          <% records.forEach(record => { %>
+            <tr>
+              <td><%= record.visit_date %></td>
+              <td><%= record.doctor_name || '-' %></td>
+              <td><%= record.department || '-' %></td>
+              <td><%= record.diagnosis %></td>
+            </tr>
+          <% }) %>
+        <% } else { %>
+          <tr><td colspan="4">등록된 진료기록이 없습니다.</td></tr>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+</div>
+<%- include('../partials/footer') %>

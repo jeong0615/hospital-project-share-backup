@@ -1,0 +1,81 @@
+# MSP backup safety boundary
+
+# Never copy nested Git repositories or local repository metadata.
+**/.git/
+
+# Environment files: examples/templates are allowed explicitly.
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.env
+!*.env.example
+
+# Cloud, SSH, Docker and local tool state.
+.aws/
+.ssh/
+.docker/
+.terraform/
+**/.aws/
+**/.ssh/
+**/.docker/
+**/.terraform/
+
+# Credentials, keys and certificates.
+*.pem
+*.key
+*.secret
+*.csr
+*.crt
+**/internal_users.yml
+
+# Terraform state and variable files. Keep reviewed examples/templates only.
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.example.tfvars
+!*.tfvars.example
+!**/*.example.tfvars
+!**/*.tfvars.example
+
+# Runtime, cache and generated data.
+node_modules/
+**/node_modules/
+.npm/
+**/.npm/
+.cache/
+**/.cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+venv/
+**/venv/
+.venv/
+**/.venv/
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.pid
+*.sock
+*.jsonl
+**/audit/
+**/data/
+**/config-backups/
+**/wazuh_indexer_ssl_certs/
+
+# Database/export/archive/log artifacts.
+db_backups/
+**/db_backups/
+*.sql
+*.dump
+*.enc
+*.zip
+*.tar
+*.tar.gz
+*.deb
+*.log
+
+# Interactive user state.
+.bash_history
+.wget-hsts

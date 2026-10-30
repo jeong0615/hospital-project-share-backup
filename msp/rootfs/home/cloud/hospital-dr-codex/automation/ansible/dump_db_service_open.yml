@@ -1,0 +1,995 @@
+---
+- name: Validate the exact Dump service-open target and phase
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse any inventory or operation outside the isolated Dump path
+      ansible.builtin.assert:
+        that:
+          - groups['web_servers'] | default([]) == ['dr-web']
+          - groups['doc_servers'] | default([]) == ['dr-doc']
+          - groups['db_servers'] | default([]) == ['dr-db']
+          - groups['isolated_dump_restore'] | default([]) == ['isolated-dump-restore']
+          - dump_open_phase in ['install', 'verify', 'stop-apps', 'verify-no-dml', 'lock-accounts', 'handoff-fence', 'pre-grant-check', 'grant-dml', 'unlock-accounts', 'verify-unlocked', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'contain-app-pre-dml', 'contain-db-pre-dml', 'contain-app-after-dml', 'contain-db-after-dml', 'record-success']
+          - dump_open_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_open_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_open_private_ip is match('^10[.]20[.]30[.](?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+          - dump_open_private_ip not in ['IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED', 'IP_REDACTED']
+          - dump_open_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_open_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_open_data_volume_id != dump_open_stage_volume_id
+          - dump_open_service_sg_id is match('^sg-[0-9a-f]{8,32}$')
+          - dump_open_expected_sha256 is match('^[0-9a-f]{64}$')
+          - dump_open_backup_id is match('^db_backup_[0-9]{8}_[0-9]{4,6}[.]sql[.]gz[.]enc$')
+          - dump_open_request_id is match('^[0-9a-f-]{36}$')
+          - dump_open_promotion_id is match('^[0-9a-f-]{36}$')
+          - dump_open_cutover_id is match('^[0-9a-f-]{36}$')
+          - dump_open_dr_eip == 'AWS_PUBLIC_IP_REDACTED'
+          - dump_open_probe_token is match('^[A-Za-z0-9_-]{40,64}$')
+          - dump_open_cloudflare_ipv4_cidrs | length > 0
+        fail_msg: Dump service-open identity or phase is invalid.
+      no_log: true
+
+- name: Install and verify only the reviewed service-open helpers
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_open_lib: /usr/local/lib/hospital-dr-dump-service-open
+    dump_open_db_helper: /usr/local/lib/hospital-dr-dump-service-open/dump_db_service_open_host.py
+  tasks:
+    - name: Ensure the protected isolated-host helper directory exists
+      ansible.builtin.file:
+        path: "{{ dump_open_lib }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: dump_open_phase == 'install'
+
+    - name: Install the exact isolated-host service-open helper set
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../operations/db/{{ item.source }}"
+        dest: "{{ dump_open_lib }}/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - { source: dump_db_service_open_host.py, dest: dump_db_service_open_host.py }
+        - { source: isolated_db_service_host.py, dest: isolated_db_service_host.py }
+        - { source: isolated_restore_host.py, dest: isolated_restore_host.py }
+      when: dump_open_phase == 'install'
+      no_log: true
+
+    - name: Verify the installed DB helper hashes on later phases
+      ansible.builtin.stat:
+        path: "{{ dump_open_lib }}/{{ item.path }}"
+        checksum_algorithm: sha256
+      loop:
+        - { path: dump_db_service_open_host.py, expected: "{{ dump_open_remote_db_helper_sha256 }}" }
+        - { path: isolated_db_service_host.py, expected: "{{ dump_open_remote_service_helper_sha256 }}" }
+        - { path: isolated_restore_host.py, expected: "{{ dump_open_remote_restore_helper_sha256 }}" }
+      register: dump_open_db_helpers
+      changed_when: false
+      when: dump_open_phase not in ['install', 'contain-app-pre-dml', 'contain-app-after-dml', 'contain-db-pre-dml', 'contain-db-after-dml']
+      no_log: true
+
+    - name: Require exact root-owned DB helper files
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == '0700'
+          - item.stat.checksum == item.item.expected
+      loop: "{{ dump_open_db_helpers.results | default([]) }}"
+      when: dump_open_phase not in ['install', 'contain-app-pre-dml', 'contain-app-after-dml', 'contain-db-pre-dml', 'contain-db-after-dml']
+      no_log: true
+
+    - name: Verify the isolated DB and current SELECT-only service contract
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_db_helper }}"
+          - verify
+          - --request-id
+          - "{{ dump_open_request_id }}"
+          - --instance-id
+          - "{{ dump_open_instance_id }}"
+          - --private-ip
+          - "{{ dump_open_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_open_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_open_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_open_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_open_backup_id }}"
+          - --promotion-id
+          - "{{ dump_open_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+      register: dump_open_db_result
+      changed_when: false
+      when: dump_open_phase == 'verify'
+      no_log: true
+
+    - name: Read only safe fields from the isolated DB verification
+      ansible.builtin.set_fact:
+        dump_open_db_json: "{{ dump_open_db_result.stdout | from_json }}"
+      when: dump_open_phase == 'verify' and dump_open_db_result.rc == 0
+      no_log: true
+
+    - name: Prepare the DB app accounts by locking exact service users
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'prepare-accounts',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: true
+      when: dump_open_phase == 'lock-accounts'
+      no_log: true
+
+    - name: Grant only hospital_db DML while both application accounts remain locked
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'grant-dml',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: true
+      when: dump_open_phase == 'grant-dml'
+      no_log: true
+
+    - name: Unlock only the two source-restricted Web and EMR service accounts
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'unlock-accounts',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: true
+      when: dump_open_phase == 'unlock-accounts'
+      no_log: true
+
+    - name: Revalidate isolated DB identity, exact DML grants, and unlocked accounts before apps start
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, ('verify-live' if dump_open_phase == 'verify-live' else 'verify-unlocked'),
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: false
+      when: dump_open_phase == 'verify-unlocked'
+      no_log: true
+
+    - name: Prove no DML since the exact locked-account baseline
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'verify-no-dml',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id,
+            '--expected-binlog-file', dump_open_expected_binlog_file,
+            '--expected-binlog-position', dump_open_expected_binlog_position | string
+          ] }}
+      register: dump_open_db_result
+      changed_when: false
+      when: dump_open_phase in ['pre-grant-check', 'verify-no-dml']
+      no_log: true
+
+    - name: Contain pre-DML failures without changing any grants
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'contain-pre-dml',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: true
+      failed_when: false
+      when: dump_open_phase == 'contain-db-pre-dml'
+      no_log: true
+
+    - name: Best-effort relock service accounts after the irreversible DML boundary
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'contain',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: true
+      failed_when: false
+      when: dump_open_phase == 'contain-db-after-dml'
+      no_log: true
+
+    - name: Record the verified service-open result without changing DR state
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_db_helper, 'record-success',
+            '--request-id', dump_open_request_id,
+            '--instance-id', dump_open_instance_id,
+            '--private-ip', dump_open_private_ip,
+            '--data-volume-id', dump_open_data_volume_id,
+            '--stage-volume-id', dump_open_stage_volume_id,
+            '--expected-sha256', dump_open_expected_sha256,
+            '--backup-id', dump_open_backup_id,
+            '--promotion-id', dump_open_promotion_id,
+            '--cutover-id', dump_open_cutover_id
+          ] }}
+      register: dump_open_db_result
+      changed_when: true
+      when: dump_open_phase == 'record-success'
+      no_log: true
+
+- name: Install and inspect Dump-only app maintenance, ingress, and probe helpers
+  hosts: web_servers:doc_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    dump_open_kind: "{{ 'web' if 'web_servers' in group_names else 'emr' }}"
+    dump_open_container: "{{ 'hospital-dr-web' if dump_open_kind == 'web' else 'hospital-dr-emr' }}"
+    dump_open_timer: "hospital-dr-dump-expire-{{ dump_open_cutover_id | replace('-', '') }}.timer"
+    dump_open_service_instance: "{{ dump_open_cutover_id | replace('-', '') }}-{{ dump_open_kind }}"
+    dump_open_service_unit: "hospital-dr-dump-service-fence@{{ dump_open_service_instance }}.service"
+    dump_open_auth_file: "/var/lib/hospital-dr-dump-service-fence/{{ dump_open_service_instance }}.json"
+    dump_open_web_helper: /usr/local/sbin/hospital-dr-dump-service-open-web
+    dump_open_fence_helper: /usr/local/sbin/hospital-dr-dump-external-fence
+    dump_open_app_probe: /usr/local/sbin/hospital-dr-dump-app-fence-probe
+    dump_open_mode_file: /etc/nginx/conf.d/hospital-dr-dump-mode.conf
+    dump_open_probe_file: /run/hospital-dr-dump-service-open/probe-token
+    dump_open_expected_app_command: "{{ ['node', 'app.js'] if dump_open_kind == 'web' else ['node', 'server.js'] }}"
+  tasks:
+    - name: Install the reviewed app-side helpers and systemd template
+      block:
+        - name: Install the exact external fence manager
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../operations/db/dump_db_external_fence.py"
+            dest: "{{ dump_open_fence_helper }}"
+            owner: root
+            group: root
+            mode: "0755"
+          when: dump_open_phase == 'install'
+
+        - name: Install the exact service-open Nginx helper
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../operations/db/dump_db_service_open_web.py"
+            dest: "{{ dump_open_web_helper }}"
+            owner: root
+            group: root
+            mode: "0755"
+          when: dump_open_phase == 'install'
+
+        - name: Install the app runtime fence inspector
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../operations/db/dump_db_app_fence_probe.py"
+            dest: "{{ dump_open_app_probe }}"
+            owner: root
+            group: root
+            mode: "0755"
+          when: dump_open_phase == 'install'
+
+        - name: Install the boot-time restricted service-fence unit
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../operations/db/systemd/hospital-dr-dump-service-fence@.service"
+            dest: /etc/systemd/system/hospital-dr-dump-service-fence@.service
+            owner: root
+            group: root
+            mode: "0644"
+          register: dump_open_unit_copy
+          when: dump_open_phase == 'install'
+
+        - name: Create root-only authorization directory
+          ansible.builtin.file:
+            path: /var/lib/hospital-dr-dump-service-fence
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          when: dump_open_phase == 'install'
+
+        - name: Reload systemd for the reviewed restricted-fence template
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: dump_open_phase == 'install' and dump_open_unit_copy.changed
+      no_log: true
+
+    - name: Inspect the current exact app and network helpers
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop:
+        - { path: "{{ dump_open_fence_helper }}", expected: "{{ dump_open_remote_fence_helper_sha256 }}" }
+        - { path: "{{ dump_open_web_helper }}", expected: "{{ dump_open_remote_web_helper_sha256 }}" }
+        - { path: "{{ dump_open_app_probe }}", expected: "{{ dump_open_remote_app_probe_sha256 }}" }
+      register: dump_open_app_helpers
+      changed_when: false
+      when: dump_open_phase not in ['install', 'contain-app-pre-dml', 'contain-db-pre-dml', 'contain-app-after-dml', 'contain-db-after-dml']
+      no_log: true
+
+    - name: Require exact root-owned app helpers
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == '0755'
+          - item.stat.checksum == item.item.expected
+      loop: "{{ dump_open_app_helpers.results | default([]) }}"
+      when: dump_open_phase not in ['install', 'contain-app-pre-dml', 'contain-db-pre-dml', 'contain-app-after-dml', 'contain-db-after-dml']
+      no_log: true
+
+    - name: Ensure a protected transient token directory exists only for this invocation
+      ansible.builtin.file:
+        path: /run/hospital-dr-dump-service-open
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: dump_open_phase in ['verify', 'handoff-fence', 'pre-grant-check', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'record-success', 'contain-app-pre-dml', 'contain-app-after-dml']
+
+    - name: Place the health token in a root-only tmpfs file without logging it
+      ansible.builtin.copy:
+        dest: "{{ dump_open_probe_file }}"
+        content: "{{ dump_open_probe_token }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when: dump_open_phase in ['verify', 'handoff-fence', 'pre-grant-check', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'record-success', 'contain-app-pre-dml', 'contain-app-after-dml']
+      ignore_errors: "{{ dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml'] }}"
+      no_log: true
+
+    - name: Verify operation-specific Nginx maintenance is still active
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_web_helper }}"
+          - verify-maintenance
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+          - --probe-token-file
+          - "{{ dump_open_probe_file }}"
+      register: dump_open_maintenance
+      changed_when: false
+      when: dump_open_phase in ['verify', 'stop-apps', 'handoff-fence', 'pre-grant-check', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance'] and dump_open_kind == 'web'
+      no_log: true
+
+    - name: Verify the preparation timer has a safe remaining window
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_web_helper }}"
+          - verify-timer
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+          - --timer-unit
+          - "{{ dump_open_timer }}"
+          - --min-remaining-seconds
+          - "120"
+      register: dump_open_timer_check
+      changed_when: false
+      when: dump_open_phase in ['verify', 'handoff-fence']
+      no_log: true
+
+    - name: Verify current app identity under the prepared or durable Dump fence
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_app_probe,
+            '--kind', dump_open_kind,
+            '--cutover-id', dump_open_cutover_id,
+            '--isolated-private-ip', dump_open_private_ip,
+            '--mode', 'service-open',
+            '--network-mode', ('strict' if dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml'] else ('service' if dump_open_phase in ['pre-grant-check', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'record-success'] else 'prepared'))
+          ] + (['--expect-stopped'] if dump_open_phase in ['pre-grant-check', 'start-apps', 'contain-app-pre-dml', 'contain-app-after-dml'] else [])
+            + (dump_open_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}
+      register: dump_open_app_contract
+      changed_when: false
+      when: dump_open_phase in ['verify', 'stop-apps', 'pre-grant-check', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'record-success']
+      no_log: true
+
+    - name: Verify image and exact single-process entrypoint against the saved app receipt
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json, subprocess, sys
+            cutover, name, expected_cmd = sys.argv[1:]
+            from pathlib import Path
+            receipt = json.loads((Path('/var/lib/hospital-dr/db-endpoint-cutovers') / cutover / 'container.json').read_text())
+            raw = subprocess.check_output(['docker','inspect','--format','{{.Image}}|{{json .Config.Cmd}}',name], text=True).strip()
+            image, cmd = raw.split('|',1)
+            if image != receipt.get('image_id') or json.loads(cmd) != json.loads(expected_cmd):
+                raise SystemExit(2)
+            print('APP_IMAGE_AND_ENTRYPOINT=PASS')
+          - "{{ dump_open_cutover_id }}"
+          - "{{ dump_open_container }}"
+          - "{{ dump_open_expected_app_command | to_json }}"
+      register: dump_open_image_contract
+      changed_when: false
+      when: dump_open_phase in ['verify', 'stop-apps', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'record-success']
+      no_log: true
+
+    - name: Verify the maintenance routes and authenticated non-identifying health endpoints
+      ansible.builtin.uri:
+        url: "https://IP_REDACTED{{ item.path }}"
+        method: GET
+        headers:
+          Host: "{{ item.host }}"
+          X-Hospital-DR-Probe: "{{ dump_open_probe_token }}"
+        status_code: "{{ item.status }}"
+        validate_certs: false
+        timeout: 10
+        return_content: false
+      loop: >-
+        {{ [
+          {'host': dump_open_web_domain, 'path': '/', 'status': 503},
+          {'host': dump_open_web_domain, 'path': '/__hospital_dr/health', 'status': 204},
+          {'host': dump_open_web_domain, 'path': '/emr/__hospital_dr/health', 'status': 204},
+          {'host': dump_open_emr_domain, 'path': '/__hospital_dr/health', 'status': 204}
+        ] if dump_open_kind == 'web' else [] }}
+      register: dump_open_local_health
+      changed_when: false
+      when: dump_open_phase in ['verify', 'handoff-fence', 'pre-grant-check', 'verify-live'] and dump_open_kind == 'web'
+      no_log: true
+
+    - name: Require only expected application identity and maintenance health responses
+      ansible.builtin.assert:
+        that:
+          - dump_open_app_contract.rc == 0
+          - (dump_open_app_contract.stdout | from_json).status == 'PASS'
+          - (dump_open_app_contract.stdout | from_json).db_host == dump_open_private_ip
+          - (dump_open_app_contract.stdout | from_json).db_port | int == 3307
+          - (dump_open_app_contract.stdout | from_json).external_fence | bool
+          - (dump_open_app_contract.stdout | from_json).container_running | bool
+          - dump_open_image_contract.stdout | trim == 'APP_IMAGE_AND_ENTRYPOINT=PASS'
+          - dump_open_local_health.results | default([]) | length == 4
+          - dump_open_local_health.results | default([]) | selectattr('status', 'equalto', 204) | list | length == 3
+          - dump_open_local_health.results | default([]) | selectattr('status', 'equalto', 503) | list | length == 1
+      when: dump_open_phase == 'verify'
+      no_log: true
+
+    - name: Verify read-only DB access directly from the Web and EMR containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -i
+          - -e
+          - "DR_EXPECTED_APP_KIND={{ dump_open_kind }}"
+          - -e
+          - "DR_EXPECTED_DB_HOST={{ dump_open_private_ip }}"
+          - -e
+          - "DR_EXPECTED_DB_SERVER_UUID={{ hostvars['isolated-dump-restore'].dump_open_db_json.db_server_uuid }}"
+          - "{{ dump_open_container }}"
+          - node
+          - -
+        stdin: "{{ lookup('file', playbook_dir ~ '/../../operations/db/dump_db_readonly_app_probe.js') }}"
+      register: dump_open_readonly_app_probe
+      changed_when: false
+      when: dump_open_phase == 'verify'
+      no_log: true
+
+    - name: Require the SELECT-only app connection before account fencing
+      ansible.builtin.assert:
+        that:
+          - dump_open_readonly_app_probe.rc == 0
+          - "'DUMP_APP_DB_PROBE=PASS identity=true privileges=SELECT_ONLY' in dump_open_readonly_app_probe.stdout"
+      when: dump_open_phase == 'verify'
+      no_log: true
+
+    - name: Stop the exact app containers before account lock and DML grant
+      ansible.builtin.command:
+        argv: [docker, stop, --time, "30", "{{ dump_open_container }}"]
+      register: dump_open_stop_container
+      changed_when: dump_open_stop_container.rc == 0
+      when: dump_open_phase == 'stop-apps'
+      no_log: true
+
+    - name: Confirm the app container is stopped before DB account lock
+      ansible.builtin.command:
+        argv: [docker, inspect, --format, "{{ '{{.State.Running}}' }}", "{{ dump_open_container }}"]
+      register: dump_open_stopped_state
+      changed_when: false
+      when: dump_open_phase in ['stop-apps', 'pre-grant-check']
+      no_log: true
+
+    - name: Require the exact app container to be stopped
+      ansible.builtin.assert:
+        that: dump_open_stopped_state.stdout | trim == 'false'
+      when: dump_open_phase in ['stop-apps', 'pre-grant-check']
+      no_log: true
+
+    - name: Reassert maintenance before replacing a possibly expired timer state
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_web_helper }}"
+          - contain
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+          - --probe-token-file
+          - "{{ dump_open_probe_file }}"
+      register: dump_open_maintenance_reassert
+      changed_when: true
+      when: dump_open_phase == 'handoff-fence' and dump_open_kind == 'web'
+      no_log: true
+
+    - name: Write the exact root-owned authorization for the narrow service firewall
+      ansible.builtin.copy:
+        dest: "{{ dump_open_auth_file }}"
+        content: >-
+          {{ {
+            'status': 'DUMP_SERVICE_FENCE_ACTIVE',
+            'role': dump_open_kind,
+            'cutover_id': dump_open_cutover_id,
+            'cloudflare_ipv4_cidrs': dump_open_cloudflare_ipv4_cidrs | sort
+          } | to_json }}
+        owner: root
+        group: root
+        mode: "0600"
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Enable and activate the durable restricted service fence
+      ansible.builtin.systemd:
+        name: "{{ dump_open_service_unit }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Verify the exact durable Cloudflare/Web-to-EMR nftables contract
+      ansible.builtin.command:
+        argv: >-
+          {{ [dump_open_fence_helper, 'verify-service', '--role', dump_open_kind, '--cutover-id', dump_open_cutover_id, '--authorization-file', dump_open_auth_file]
+             + (dump_open_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}
+      register: dump_open_service_fence_verified
+      changed_when: false
+      when: dump_open_phase in ['handoff-fence', 'pre-grant-check', 'start-apps', 'app-probe', 'verify-live', 'release-maintenance', 'record-success']
+      no_log: true
+
+    - name: Require the durable restricted service fence before replacing the expiry timer
+      ansible.builtin.assert:
+        that:
+          - dump_open_service_fence_verified.rc == 0
+          - "'DUMP_SERVICE_FENCE=PASS' in dump_open_service_fence_verified.stdout"
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Stop the 30-minute timer only after durable service-fence verification
+      ansible.builtin.command:
+        argv: [systemctl, stop, "{{ dump_open_timer }}"]
+      register: dump_open_timer_stop
+      changed_when: dump_open_timer_stop.rc == 0
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Verify the preparation timer is inactive after fence handoff
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ dump_open_timer }}"]
+      register: dump_open_timer_after_handoff
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Reverify the exact durable fence after timer cancellation
+      ansible.builtin.command:
+        argv: >-
+          {{ [dump_open_fence_helper, 'verify-service', '--role', dump_open_kind, '--cutover-id', dump_open_cutover_id, '--authorization-file', dump_open_auth_file]
+             + (dump_open_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}
+      register: dump_open_service_fence_after_timer
+      changed_when: false
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Require timer cancellation and durable fence to remain verified
+      ansible.builtin.assert:
+        that:
+          - dump_open_timer_stop.rc == 0
+          - dump_open_timer_after_handoff.rc != 0 or dump_open_timer_after_handoff.stdout | trim != 'active'
+          - dump_open_service_fence_after_timer.rc == 0
+          - "'DUMP_SERVICE_FENCE=PASS' in dump_open_service_fence_after_timer.stdout"
+      when: dump_open_phase == 'handoff-fence'
+      no_log: true
+
+    - name: Start the fenced app containers only after DML grants are verified and accounts unlocked
+      ansible.builtin.command:
+        argv: [docker, start, "{{ dump_open_container }}"]
+      register: dump_open_start_container
+      changed_when: dump_open_start_container.rc == 0
+      when: dump_open_phase == 'start-apps'
+      no_log: true
+
+    - name: Wait for the loopback-only container health check
+      ansible.builtin.command:
+        argv: [docker, inspect, --format, "{{ '{{.State.Health.Status}}|{{.State.Running}}' }}", "{{ dump_open_container }}"]
+      register: dump_open_container_health
+      retries: 12
+      delay: 5
+      until: dump_open_container_health.stdout | trim == 'healthy|true'
+      changed_when: false
+      when: dump_open_phase == 'start-apps'
+      no_log: true
+
+    - name: Verify the app's exact DML grant by a SELECT-only identity/grant query
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -i
+          - -e
+          - "DR_EXPECTED_APP_KIND={{ dump_open_kind }}"
+          - -e
+          - "DR_EXPECTED_DB_HOST={{ dump_open_private_ip }}"
+          - -e
+          - "DR_EXPECTED_DB_SERVER_UUID={{ dump_open_db_server_uuid }}"
+          - "{{ dump_open_container }}"
+          - node
+          - -
+        stdin: "{{ lookup('file', playbook_dir ~ '/../../operations/db/dump_db_service_open_app_probe.js') }}"
+      register: dump_open_write_app_probe
+      changed_when: false
+      when: dump_open_phase in ['app-probe', 'verify-live']
+      no_log: true
+
+    - name: Require the isolated DB identity and exact hospital_db DML privileges
+      ansible.builtin.assert:
+        that:
+          - dump_open_write_app_probe.rc == 0
+          - "'DUMP_SERVICE_OPEN_APP_PROBE=PASS identity=true privileges=HOSPITAL_DB_DML' in dump_open_write_app_probe.stdout"
+      when: dump_open_phase in ['app-probe', 'verify-live']
+      no_log: true
+
+    - name: Release maintenance only after DB identity, grants, and app health gates pass
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_web_helper }}"
+          - release
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+          - --probe-token-file
+          - "{{ dump_open_probe_file }}"
+      register: dump_open_maintenance_release
+      changed_when: true
+      when: dump_open_phase == 'release-maintenance' and dump_open_kind == 'web'
+      no_log: true
+
+    - name: Verify the exact Dump maintenance map is released before success receipt
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_web_helper }}"
+          - verify-released
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+          - --probe-token-file
+          - "{{ dump_open_probe_file }}"
+      register: dump_open_maintenance_released
+      changed_when: false
+      when: dump_open_phase == 'record-success' and dump_open_kind == 'web'
+      no_log: true
+
+    - name: Re-fence external HTTP(S) before any post-failure app operation
+      ansible.builtin.command:
+        argv: >-
+          {{ [dump_open_fence_helper, 'restore-operation-strict', '--role', dump_open_kind, '--cutover-id', dump_open_cutover_id]
+             + (dump_open_cloudflare_ipv4_cidrs | map('regex_replace', '^', '--cloudflare-ipv4-cidr=') | list) }}
+      register: dump_open_strict_restore
+      changed_when: dump_open_strict_restore.rc == 0
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Verify strict external deny when operation rules were already absent
+      ansible.builtin.command:
+        argv: ["{{ dump_open_fence_helper }}", verify]
+      register: dump_open_strict_existing
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml'] and dump_open_strict_restore.rc != 0
+      no_log: true
+
+    - name: Restore Web maintenance only after the external strict fence is attempted
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_web_helper }}"
+          - contain
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+          - --probe-token-file
+          - "{{ dump_open_probe_file }}"
+      register: dump_open_contain_maintenance
+      changed_when: dump_open_contain_maintenance.rc == 0
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml'] and dump_open_kind == 'web'
+      no_log: true
+
+    - name: Stop the exact Web or EMR container after strict ingress fencing
+      ansible.builtin.command:
+        argv: [docker, stop, --time, "30", "{{ dump_open_container }}"]
+      register: dump_open_contain_stop
+      changed_when: dump_open_contain_stop.rc == 0
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Verify the exact service container is stopped
+      ansible.builtin.command:
+        argv: [docker, inspect, --format, "{{ '{{.State.Running}}' }}", "{{ dump_open_container }}"]
+      register: dump_open_contain_stopped_state
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Disable only this Dump operation's durable service-fence unit
+      ansible.builtin.systemd:
+        name: "{{ dump_open_service_unit }}"
+        enabled: false
+        state: stopped
+      register: dump_open_contain_service_unit
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Remove only this operation's boot-time service-fence authorization
+      ansible.builtin.file:
+        path: "{{ dump_open_auth_file }}"
+        state: absent
+      register: dump_open_contain_auth_removed
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Keep the strict Dump deny unit enabled across reboot
+      ansible.builtin.systemd:
+        name: hospital-dr-dump-readonly-fence.service
+        enabled: true
+        state: started
+      register: dump_open_contain_strict_unit
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Re-verify the strict fence after service authorization removal
+      ansible.builtin.command:
+        argv: ["{{ dump_open_fence_helper }}", verify]
+      register: dump_open_contain_strict_final
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Verify the boot authorization is disabled and absent
+      ansible.builtin.command:
+        argv: [systemctl, show, --property=UnitFileState, --value, "{{ dump_open_service_unit }}"]
+      register: dump_open_contain_service_enabled
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Verify the persistent strict-fence unit remains enabled
+      ansible.builtin.command:
+        argv: [systemctl, show, --property=UnitFileState, --value, hospital-dr-dump-readonly-fence.service]
+      register: dump_open_contain_readonly_enabled
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Verify this operation's boot authorization was removed
+      ansible.builtin.stat:
+        path: "{{ dump_open_auth_file }}"
+      register: dump_open_contain_auth_stat
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Inspect the app contract only after strict network containment
+      ansible.builtin.command:
+        argv: >-
+          {{ [
+            'python3', dump_open_app_probe,
+            '--kind', dump_open_kind,
+            '--cutover-id', dump_open_cutover_id,
+            '--isolated-private-ip', dump_open_private_ip,
+            '--mode', 'service-open', '--network-mode', 'strict', '--expect-stopped'
+          ] }}
+      register: dump_open_contained_app
+      changed_when: false
+      failed_when: false
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+    - name: Record whether this app host has proved a complete fail-closed state
+      ansible.builtin.set_fact:
+        dump_open_app_containment_ok: >-
+          {{ not (dump_open_contain_strict_unit.failed | default(false))
+             and dump_open_contain_readonly_enabled.rc == 0
+             and dump_open_contain_readonly_enabled.stdout | trim == 'enabled'
+             and dump_open_contain_strict_final.rc == 0
+             and 'DUMP_READONLY_EXTERNAL_FENCE=PASS' in dump_open_contain_strict_final.stdout
+             and dump_open_contain_service_enabled.rc == 0
+             and dump_open_contain_service_enabled.stdout | trim != 'enabled'
+             and not dump_open_contain_auth_stat.stat.exists
+             and dump_open_contain_stopped_state.rc == 0
+             and dump_open_contain_stopped_state.stdout | trim == 'false'
+             and dump_open_contained_app.rc == 0
+             and (dump_open_contained_app.stdout | from_json).status == 'PASS'
+             and (dump_open_kind != 'web' or (dump_open_contain_maintenance.rc == 0 and 'MAINTENANCE_RESTORED' in dump_open_contain_maintenance.stdout)) }}
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+      no_log: true
+
+- name: Reverify isolated DB grants and no early writes after both app probes
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_open_db_helper: /usr/local/lib/hospital-dr-dump-service-open/dump_db_service_open_host.py
+  tasks:
+    - name: Verify unlocked app accounts, exact grants, database identity, and no writes since unlock
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_open_db_helper }}"
+          - verify-live
+          - --request-id
+          - "{{ dump_open_request_id }}"
+          - --instance-id
+          - "{{ dump_open_instance_id }}"
+          - --private-ip
+          - "{{ dump_open_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_open_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_open_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_open_expected_sha256 }}"
+          - --backup-id
+          - "{{ dump_open_backup_id }}"
+          - --promotion-id
+          - "{{ dump_open_promotion_id }}"
+          - --cutover-id
+          - "{{ dump_open_cutover_id }}"
+      register: dump_open_db_live_result
+      changed_when: false
+      when: dump_open_phase == 'verify-live'
+      no_log: true
+
+- name: Verify the reopened application and finalize only the service-open receipt
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Emit non-secret DB identity and binlog proof for read-only phases
+      ansible.builtin.debug:
+        msg: >-
+          DUMP_SERVICE_OPEN_REMOTE=PASS phase={{ dump_open_phase }}
+          {% if dump_open_phase in ['verify', 'lock-accounts', 'unlock-accounts', 'pre-grant-check', 'verify-no-dml', 'verify-unlocked', 'verify-live'] %}
+          {% set db_command = (hostvars['isolated-dump-restore'].dump_open_db_live_result | default({}) if dump_open_phase == 'verify-live' else hostvars['isolated-dump-restore'].dump_open_db_result | default({})) %}
+          {% set db_result = db_command.stdout | default('{}') | from_json %}
+          binlog_file={{ db_result.binlog_file | default('') }}
+          binlog_position={{ db_result.binlog_position | default('') }}
+          db_server_uuid={{ db_result.db_server_uuid | default('') }}
+          {% endif %}
+      when: dump_open_phase in ['verify', 'lock-accounts', 'unlock-accounts', 'pre-grant-check', 'verify-no-dml', 'verify-unlocked', 'verify-live']
+
+    - name: Report verified pre-DML DB account containment for snapshot rollback policy
+      ansible.builtin.debug:
+        msg: >-
+          {% set db_command = hostvars['isolated-dump-restore'].dump_open_db_result | default({}) %}
+          {% set db_result = db_command.stdout | default('{}') | from_json %}
+          {% if db_command.rc | default(1) == 0
+             and db_result.service_accounts_locked is sameas true
+             and db_result.dml_grant_attempted is sameas false
+             and db_result.binlog_file is defined and db_result.binlog_position is defined
+             and db_result.db_server_uuid is defined %}
+          DUMP_SERVICE_OPEN_REMOTE=PASS phase=contain-db-pre-dml binlog_file={{ db_result.binlog_file }} binlog_position={{ db_result.binlog_position }} db_server_uuid={{ db_result.db_server_uuid }}
+          {% else %}
+          DUMP_SERVICE_OPEN_REMOTE=PARTIAL phase=contain-db-pre-dml operator_intervention_required=true
+          {% endif %}
+      when: dump_open_phase == 'contain-db-pre-dml'
+
+    - name: Report post-DML DB containment only when accounts are locked and sessions quiesced
+      ansible.builtin.debug:
+        msg: >-
+          {% set db_command = hostvars['isolated-dump-restore'].dump_open_db_result | default({}) %}
+          {% set db_result = db_command.stdout | default('{}') | from_json %}
+          {% if db_command.rc | default(1) == 0
+             and db_result.service_accounts_locked is sameas true
+             and db_result.sessions_quiesced is sameas true %}
+          DUMP_SERVICE_OPEN_REMOTE=PASS phase=contain-db-after-dml
+          {% else %}
+          DUMP_SERVICE_OPEN_REMOTE=PARTIAL phase=contain-db-after-dml operator_intervention_required=true
+          {% endif %}
+      when: dump_open_phase == 'contain-db-after-dml'
+
+    - name: Report app containment only when both app hosts prove strict denial and stop
+      ansible.builtin.debug:
+        msg: >-
+          {% if hostvars['dr-web'].dump_open_app_containment_ok | default(false) | bool
+             and hostvars['dr-doc'].dump_open_app_containment_ok | default(false) | bool %}
+          DUMP_SERVICE_OPEN_REMOTE=PASS phase={{ dump_open_phase }}
+          {% else %}
+          DUMP_SERVICE_OPEN_REMOTE=PARTIAL phase={{ dump_open_phase }} operator_intervention_required=true
+          {% endif %}
+      when: dump_open_phase in ['contain-app-pre-dml', 'contain-app-after-dml']
+
+    - name: Emit a non-secret completion marker for ordinary service-open phases
+      ansible.builtin.debug:
+        msg: "DUMP_SERVICE_OPEN_REMOTE=PASS phase={{ dump_open_phase }}"
+      when: dump_open_phase in ['install', 'stop-apps', 'handoff-fence', 'grant-dml', 'unlock-accounts', 'start-apps', 'app-probe', 'release-maintenance', 'record-success']

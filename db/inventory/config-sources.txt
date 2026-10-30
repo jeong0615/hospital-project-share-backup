@@ -1,0 +1,13 @@
+# Safe MySQL configuration files copied under db/configs/etc/mysql/:
+/etc/mysql/conf.d/mysql.cnf
+/etc/mysql/conf.d/mysqldump.cnf
+/etc/mysql/debian-start
+/etc/mysql/my.cnf.fallback
+/etc/mysql/mysql.cnf
+/etc/mysql/mysql.conf.d/mysql.cnf
+/etc/mysql/mysql.conf.d/mysqld.cnf
+
+# Intentionally excluded:
+# /etc/mysql/debian.cnf (credential material)
+# /var/lib/mysql/*.pem and *-key.pem (TLS/private keys)
+# /var/lib/mysql/ (live InnoDB data and runtime files)

@@ -1,0 +1,13 @@
+Original path -> backup path
+/etc/nginx/ -> emr/rootfs/etc/nginx/
+/etc/apache2/sites-available/000-default.conf -> emr/rootfs/etc/apache2/sites-available/000-default.conf
+/etc/apache2/sites-enabled/000-default.conf -> emr/rootfs/etc/apache2/sites-enabled/000-default.conf
+/etc/apache2/ports.conf -> emr/rootfs/etc/apache2/ports.conf
+/etc/openvpn/update-resolv-conf -> emr/rootfs/etc/openvpn/update-resolv-conf
+/etc/vsftpd.conf -> emr/rootfs/etc/vsftpd.conf
+/etc/zabbix/zabbix_agentd.conf -> emr/rootfs/etc/zabbix/zabbix_agentd.conf
+/var/ossec/etc/ossec.conf -> emr/rootfs/var/ossec/etc/ossec.conf
+/var/ossec/etc/local_internal_options.conf -> emr/rootfs/var/ossec/etc/local_internal_options.conf
+/var/www/html/ -> emr/rootfs/var/www/html/
+
+Wazuh client.keys, wpk_root.pem, SSH keys, TLS/private keys, and other credential material were excluded.

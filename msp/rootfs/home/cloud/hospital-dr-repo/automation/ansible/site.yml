@@ -1,0 +1,18 @@
+---
+- name: "Configure and deploy DR web tier / DR Web 계층 구성 및 배포"
+  hosts: web_servers
+  become: yes
+  roles:
+    - web_deploy
+
+- name: "Configure and deploy DR document tier / DR 문서 계층 구성 및 배포"
+  hosts: doc_servers
+  become: yes
+  roles:
+    - doc_deploy
+
+- name: "Restore and configure DR database tier / DR 데이터베이스 계층 복구 및 구성"
+  hosts: db_servers
+  become: yes
+  roles:
+    - db_recovery

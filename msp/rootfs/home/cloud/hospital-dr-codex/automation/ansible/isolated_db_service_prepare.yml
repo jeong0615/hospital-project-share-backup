@@ -1,0 +1,136 @@
+---
+- name: Verify or explicitly prepare the isolated Dump DB's private service listener
+  hosts: isolated_dump_restore
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    dump_db_service_helper_path: /usr/local/sbin/hospital-dr-isolated-db-service
+    dump_db_service_password_remote_path: /run/hospital-dr-dump-restore/.service-account-password
+  pre_tasks:
+    - name: Require the isolated DB identity, distinct EBS volumes, and a fixed service port
+      ansible.builtin.assert:
+        that:
+          - dump_restore_expected_instance_id is match('^i-[0-9a-f]{8,17}$')
+          - dump_restore_expected_instance_id != 'AWS_RESOURCE_ID_REDACTED'
+          - dump_restore_expected_private_ip is match('^10[.]20[.]30[.][0-9]{1,3}$')
+          - dump_restore_expected_private_ip not in ['IP_REDACTED', 'IP_REDACTED']
+          - dump_restore_expected_data_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_restore_expected_stage_volume_id is match('^vol-[0-9a-f]{8,32}$')
+          - dump_restore_expected_data_volume_id != dump_restore_expected_stage_volume_id
+          - dump_restore_expected_sha256 is match('^[0-9a-fA-F]{64}$')
+          - dump_db_service_port | int == 3307
+        fail_msg: Isolated DB service target or MySQL port is invalid.
+
+    - name: Require a separate explicit confirmation for listener preparation
+      ansible.builtin.assert:
+        that:
+          - not (dump_db_service_prepare | default(false) | bool) or (dump_db_service_prepare_confirm | default(false) | bool)
+          - not (dump_db_service_prepare | default(false) | bool) or (dump_db_service_password is defined)
+        fail_msg: MySQL service listener preparation requires explicit confirmation and a protected service credential.
+
+    - name: Require the service and restore verifier modules already installed by isolated restore preparation
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ dump_db_service_helper_path }}"
+        - /usr/local/sbin/isolated_restore_host.py
+      register: dump_db_service_helpers
+
+    - name: Refuse service preparation if its verified helper code is missing
+      ansible.builtin.assert:
+        that: dump_db_service_helpers.results | map(attribute='stat.exists') | list | min
+        fail_msg: Isolated DB service helper is missing; rerun the reviewed isolated restore preparation first.
+
+    - name: Verify EC2 metadata, both EBS serials, exact successful restore receipt, and loopback MySQL state
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ dump_db_service_helper_path }}"
+          - verify-service-preconditions
+          - --instance-id
+          - "{{ dump_restore_expected_instance_id }}"
+          - --private-ip
+          - "{{ dump_restore_expected_private_ip }}"
+          - --data-volume-id
+          - "{{ dump_restore_expected_data_volume_id }}"
+          - --stage-volume-id
+          - "{{ dump_restore_expected_stage_volume_id }}"
+          - --expected-sha256
+          - "{{ dump_restore_expected_sha256 }}"
+          - --request-id
+          - "{{ dump_db_service_request_id | default('') }}"
+      register: dump_db_service_preflight
+      changed_when: false
+
+    - name: Confirm the remote credential staging filesystem is tmpfs
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - -n
+          - -o
+          - FSTYPE
+          - --target
+          - /run
+      register: dump_db_service_run_fstype
+      changed_when: false
+      when: dump_db_service_prepare | default(false) | bool
+
+    - name: Refuse service preparation if /run is not tmpfs
+      ansible.builtin.assert:
+        that:
+          - dump_db_service_run_fstype.stdout | trim == 'tmpfs'
+        fail_msg: Service credential staging requires a tmpfs /run filesystem.
+      when: dump_db_service_prepare | default(false) | bool
+
+  tasks:
+    - name: Prepare a least-privilege account, read-only MySQL state, and private-only listener
+      block:
+        - name: Prepare a root-only tmpfs location for the short-lived service credential
+          ansible.builtin.file:
+            path: /run/hospital-dr-dump-restore
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          when: dump_db_service_prepare | default(false) | bool
+
+        - name: Copy the service credential to root-only tmpfs without displaying it
+          ansible.builtin.copy:
+            content: "{{ dump_db_service_password }}"
+            dest: "{{ dump_db_service_password_remote_path }}"
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+          when: dump_db_service_prepare | default(false) | bool
+
+        - name: Activate the explicitly gated isolated DB service listener
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ dump_db_service_helper_path }}"
+              - prepare-service-listener
+              - --instance-id
+              - "{{ dump_restore_expected_instance_id }}"
+              - --private-ip
+              - "{{ dump_restore_expected_private_ip }}"
+              - --data-volume-id
+              - "{{ dump_restore_expected_data_volume_id }}"
+              - --stage-volume-id
+              - "{{ dump_restore_expected_stage_volume_id }}"
+              - --expected-sha256
+              - "{{ dump_restore_expected_sha256 }}"
+              - --request-id
+              - "{{ dump_db_service_request_id | default('') }}"
+              - --service-password-file
+              - "{{ dump_db_service_password_remote_path }}"
+          no_log: true
+          when: dump_db_service_prepare | default(false) | bool
+      always:
+        - name: Remove the short-lived service credential
+          ansible.builtin.file:
+            path: "{{ dump_db_service_password_remote_path }}"
+            state: absent
+          no_log: true
+          when: dump_db_service_prepare | default(false) | bool

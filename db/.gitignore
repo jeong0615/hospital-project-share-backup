@@ -1,0 +1,13 @@
+# Runtime, credential, and incomplete backup material
+*.part
+*.log
+*.pem
+*-key.pem
+*.key
+*.secret
+.env
+.env.*
+debian.cnf
+
+# Raw SQL exports are excluded by default.
+*.sql

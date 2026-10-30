@@ -1,0 +1,17 @@
+Collection date: 2026-10-29
+Host: hoseo-VirtualBox
+OS: Ubuntu 22.04.5 LTS
+Kernel: 6.8.0-124-generic
+MySQL server: 8.0.46-0ubuntuIP_REDACTED
+MySQL client: 8.0.46-0ubuntuIP_REDACTED
+MySQL service: active, enabled
+Backup timer: hospital-db-backup.timer, enabled
+Latest complete encrypted backup: db_backup_20261029_100000
+NR/backup observation: complete encrypted pair present; latest scheduled backup completed
+Database: hospital_db
+Listen address: IP_REDACTED:3306
+Data directory: /var/lib/mysql/
+Binary log: enabled
+Binary log format: ROW
+GTID: OFF
+Server ID: 1

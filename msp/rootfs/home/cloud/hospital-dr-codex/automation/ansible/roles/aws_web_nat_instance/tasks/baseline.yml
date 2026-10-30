@@ -1,0 +1,287 @@
+---
+- name: Read the private NAT state directory and baseline marker
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ aws_web_nat_instance_state_dir }}"
+    - "{{ aws_web_nat_instance_baseline_file }}"
+  register: aws_web_nat_instance_state_stats
+  changed_when: false
+
+- name: Refuse an incomplete or non-private NAT baseline directory
+  ansible.builtin.assert:
+    that:
+      - not aws_web_nat_instance_state_stats.results[0].stat.exists or aws_web_nat_instance_state_stats.results[0].stat.isdir | default(false)
+      - not aws_web_nat_instance_state_stats.results[0].stat.islnk | default(false)
+      - not aws_web_nat_instance_state_stats.results[0].stat.exists or aws_web_nat_instance_state_stats.results[0].stat.pw_name == 'root'
+      - not aws_web_nat_instance_state_stats.results[0].stat.exists or aws_web_nat_instance_state_stats.results[0].stat.mode == '0700'
+      - not aws_web_nat_instance_state_stats.results[0].stat.exists or aws_web_nat_instance_state_stats.results[1].stat.exists
+      - not aws_web_nat_instance_state_stats.results[1].stat.exists or aws_web_nat_instance_state_stats.results[1].stat.isreg | default(false)
+      - not aws_web_nat_instance_state_stats.results[1].stat.islnk | default(false)
+      - not aws_web_nat_instance_state_stats.results[1].stat.exists or aws_web_nat_instance_state_stats.results[1].stat.pw_name == 'root'
+      - not aws_web_nat_instance_state_stats.results[1].stat.exists or aws_web_nat_instance_state_stats.results[1].stat.mode == '0600'
+    fail_msg: "NAT baseline state is partial, linked, or not root-private; refusing to overwrite it."
+
+- name: Load an existing NAT baseline for reapply or rollback
+  ansible.builtin.slurp:
+    src: "{{ aws_web_nat_instance_baseline_file }}"
+  register: aws_web_nat_instance_baseline_slurp
+  when: aws_web_nat_instance_state_stats.results[1].stat.exists
+  no_log: true
+
+- name: Decode an existing NAT baseline
+  ansible.builtin.set_fact:
+    aws_web_nat_instance_baseline: "{{ aws_web_nat_instance_baseline_slurp.content | b64decode | from_json }}"
+  when: aws_web_nat_instance_state_stats.results[1].stat.exists
+  no_log: true
+
+- name: Validate an existing NAT baseline belongs to this exact Web target
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_baseline.schema_version == 1
+      - aws_web_nat_instance_baseline.instance_id == aws_web_nat_instance_expected_instance_id
+      - aws_web_nat_instance_baseline.private_ip == aws_web_nat_instance_expected_private_ip
+      - aws_web_nat_instance_baseline.vpc_id == aws_web_nat_instance_expected_vpc_id
+      - aws_web_nat_instance_baseline.subnet_id == aws_web_nat_instance_expected_subnet_id
+      - aws_web_nat_instance_baseline.eni == aws_web_nat_instance_expected_eni
+    fail_msg: "NAT baseline target identity differs; refusing apply or rollback."
+  when: aws_web_nat_instance_state_stats.results[1].stat.exists
+  no_log: true
+
+- name: Require an existing applied NAT role to verify before reapply
+  ansible.builtin.command: "{{ aws_web_nat_instance_script }} verify"
+  register: aws_web_nat_instance_existing_verify
+  changed_when: false
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Require a baseline before removal
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_state_stats.results[1].stat.exists
+      - aws_web_nat_instance_baseline is defined
+    fail_msg: "NAT baseline is absent; the role will not guess what to remove or restore."
+  when: aws_web_nat_instance_action == 'remove'
+
+- name: Create private baseline directories for a first apply
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - "{{ aws_web_nat_instance_state_dir }}"
+    - "{{ aws_web_nat_instance_state_dir }}/baseline"
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Capture original sysctl configuration metadata
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_sysctl_file }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_original_sysctl
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Capture original NAT controller metadata
+  ansible.builtin.stat:
+    path: "{{ aws_web_nat_instance_script }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_original_script
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Capture original NAT systemd unit metadata
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ aws_web_nat_instance_service }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: aws_web_nat_instance_original_unit
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Refuse to snapshot non-regular or symbolic-link role targets
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk | default(false)
+      - not item.stat.exists or item.stat.isreg | default(false)
+    fail_msg: "A NAT target file is not a regular file; refusing to replace it."
+  loop:
+    - "{{ aws_web_nat_instance_original_sysctl }}"
+    - "{{ aws_web_nat_instance_original_script }}"
+    - "{{ aws_web_nat_instance_original_unit }}"
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Read original runtime IPv4 forwarding state
+  ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+  register: aws_web_nat_instance_original_ip_forward
+  changed_when: false
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Read original NAT systemd active state
+  ansible.builtin.command: "systemctl is-active {{ aws_web_nat_instance_service }}"
+  register: aws_web_nat_instance_original_service_active
+  changed_when: false
+  failed_when: false
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Read original NAT systemd enabled state
+  ansible.builtin.command: "systemctl is-enabled {{ aws_web_nat_instance_service }}"
+  register: aws_web_nat_instance_original_service_enabled
+  changed_when: false
+  failed_when: false
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Read original NAT systemd fragment path
+  ansible.builtin.command: "systemctl show -p FragmentPath --value {{ aws_web_nat_instance_service }}"
+  register: aws_web_nat_instance_original_service_fragment
+  changed_when: false
+  failed_when: false
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Read the pre-existing iptables package state without installing packages
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - -f=${db:Status-Status}
+      - iptables
+  register: aws_web_nat_instance_original_package
+  changed_when: false
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Require stable, restorable baseline values
+  ansible.builtin.assert:
+    that:
+      - aws_web_nat_instance_original_ip_forward.stdout | trim in ['0', '1']
+      - aws_web_nat_instance_original_package.stdout | trim == 'installed'
+      - aws_web_nat_instance_original_service_active.stdout | trim in ['active', 'inactive']
+      - aws_web_nat_instance_original_service_enabled.stdout | trim in ['enabled', 'disabled', 'not-found']
+      - aws_web_nat_instance_original_service_enabled.stdout | trim != 'not-found' or aws_web_nat_instance_original_service_fragment.stdout | trim == ''
+      - aws_web_nat_instance_original_service_enabled.stdout | trim == 'not-found' or aws_web_nat_instance_original_service_fragment.stdout | trim != ''
+    fail_msg: "The NAT baseline cannot be safely snapshotted; no package or service changes were made."
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+
+- name: Save the original sysctl file content privately
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ aws_web_nat_instance_sysctl_file }}"
+    dest: "{{ aws_web_nat_instance_state_dir }}/baseline/sysctl"
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+    - aws_web_nat_instance_original_sysctl.stat.exists
+
+- name: Save the original NAT controller content privately
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ aws_web_nat_instance_script }}"
+    dest: "{{ aws_web_nat_instance_state_dir }}/baseline/controller"
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+    - aws_web_nat_instance_original_script.stat.exists
+
+- name: Save the original systemd unit content privately
+  ansible.builtin.copy:
+    remote_src: true
+    src: "/etc/systemd/system/{{ aws_web_nat_instance_service }}"
+    dest: "{{ aws_web_nat_instance_state_dir }}/baseline/service"
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+    - aws_web_nat_instance_original_unit.stat.exists
+
+- name: Build the exact pre-NAT baseline manifest
+  ansible.builtin.set_fact:
+    aws_web_nat_instance_baseline:
+      schema_version: 1
+      instance_id: "{{ aws_web_nat_instance_expected_instance_id }}"
+      private_ip: "{{ aws_web_nat_instance_expected_private_ip }}"
+      vpc_id: "{{ aws_web_nat_instance_expected_vpc_id }}"
+      subnet_id: "{{ aws_web_nat_instance_expected_subnet_id }}"
+      eni: "{{ aws_web_nat_instance_expected_eni }}"
+      files:
+        sysctl:
+          path: "{{ aws_web_nat_instance_sysctl_file }}"
+          exists: "{{ aws_web_nat_instance_original_sysctl.stat.exists | bool }}"
+          backup: "{{ aws_web_nat_instance_state_dir }}/baseline/sysctl"
+          mode: "{{ aws_web_nat_instance_original_sysctl.stat.mode | default('') }}"
+          uid: "{{ aws_web_nat_instance_original_sysctl.stat.uid | default(0) | int }}"
+          gid: "{{ aws_web_nat_instance_original_sysctl.stat.gid | default(0) | int }}"
+          sha256: "{{ aws_web_nat_instance_original_sysctl.stat.checksum | default('') }}"
+        controller:
+          path: "{{ aws_web_nat_instance_script }}"
+          exists: "{{ aws_web_nat_instance_original_script.stat.exists | bool }}"
+          backup: "{{ aws_web_nat_instance_state_dir }}/baseline/controller"
+          mode: "{{ aws_web_nat_instance_original_script.stat.mode | default('') }}"
+          uid: "{{ aws_web_nat_instance_original_script.stat.uid | default(0) | int }}"
+          gid: "{{ aws_web_nat_instance_original_script.stat.gid | default(0) | int }}"
+          sha256: "{{ aws_web_nat_instance_original_script.stat.checksum | default('') }}"
+        service:
+          path: "/etc/systemd/system/{{ aws_web_nat_instance_service }}"
+          exists: "{{ aws_web_nat_instance_original_unit.stat.exists | bool }}"
+          backup: "{{ aws_web_nat_instance_state_dir }}/baseline/service"
+          mode: "{{ aws_web_nat_instance_original_unit.stat.mode | default('') }}"
+          uid: "{{ aws_web_nat_instance_original_unit.stat.uid | default(0) | int }}"
+          gid: "{{ aws_web_nat_instance_original_unit.stat.gid | default(0) | int }}"
+          sha256: "{{ aws_web_nat_instance_original_unit.stat.checksum | default('') }}"
+      runtime:
+        ip_forward: "{{ aws_web_nat_instance_original_ip_forward.stdout | trim }}"
+        service_active: "{{ aws_web_nat_instance_original_service_active.stdout | trim == 'active' }}"
+        service_enabled: "{{ aws_web_nat_instance_original_service_enabled.stdout | trim == 'enabled' }}"
+        service_active_status: "{{ aws_web_nat_instance_original_service_active.stdout | trim }}"
+        service_enabled_status: "{{ aws_web_nat_instance_original_service_enabled.stdout | trim }}"
+        service_fragment: "{{ aws_web_nat_instance_original_service_fragment.stdout | trim }}"
+        iptables_installed: true
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+  no_log: true
+
+- name: Persist the baseline manifest atomically with private permissions
+  ansible.builtin.copy:
+    content: "{{ aws_web_nat_instance_baseline | to_nice_json }}\n"
+    dest: "{{ aws_web_nat_instance_baseline_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - aws_web_nat_instance_action == 'apply'
+    - not aws_web_nat_instance_state_stats.results[1].stat.exists
+  no_log: true

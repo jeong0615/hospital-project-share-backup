@@ -1,0 +1,494 @@
+---
+- name: "Initialize DR database provisioning variables / DR DB 프로비저닝 변수 초기화"
+  set_fact:
+    db_backup_key: "{{ lookup('env', 'DB_BACKUP_ENCRYPTION_KEY') | default('', true) }}"
+    db_backup_file: "{{ lookup('env', 'DB_BACKUP_FILE') | default('', true) }}"
+    db_backup_file_remote: ""
+    db_backup_status_file: ""
+    db_allow_existing_data: "{{ (lookup('env', 'DB_ALLOW_EXISTING_DATA') | default('false', true) | lower) == 'true' }}"
+    db_nr_enabled: "{{ (lookup('env', 'DB_NR_ENABLED') | default('false', true) | lower) == 'true' }}"
+    db_promote_on_failover: "{{ (lookup('env', 'DB_PROMOTE_ON_FAILOVER') | default('false', true) | lower) == 'true' }}"
+    db_target_name: "{{ lookup('env', 'TARGET_DB') | default('hospital_db', true) }}"
+    db_replication_user: "{{ lookup('env', 'DB_REPL_USER') | default('repl1', true) }}"
+
+- name: "Set remote path for the selected backup / 선택한 backup의 원격 경로 설정"
+  set_fact:
+    db_backup_file_remote: "/home/ubuntu/db_backups/{{ db_backup_file | basename }}"
+    db_backup_status_file: "{{ db_backup_file | regex_replace('\\.sql\\.gz\\.enc$', '.master_status') }}"
+  when: db_backup_file | length > 0
+
+- name: "Require an explicit and complete backup input pair / 명시적이고 완전한 backup 입력 pair 요구"
+  assert:
+    that:
+      - (db_backup_key | length == 0) == (db_backup_file | length == 0)
+    fail_msg: "DB_BACKUP_ENCRYPTION_KEY and DB_BACKUP_FILE must be supplied together; do not silently ignore a partial backup input."
+  no_log: true
+
+- name: "Check selected backup artifact on the controller / controller의 선택된 backup artifact 확인"
+  stat:
+    path: "{{ db_backup_file }}"
+  delegate_to: localhost
+  become: false
+  register: db_backup_file_stat
+  when: db_backup_file | length > 0
+
+- name: "Check matching backup coordinate on the controller / controller의 matching 좌표 확인"
+  stat:
+    path: "{{ db_backup_status_file }}"
+  delegate_to: localhost
+  become: false
+  register: db_backup_status_file_stat
+  when: db_backup_file | length > 0
+
+- name: "Require readable complete backup pair / 읽을 수 있는 complete backup pair 요구"
+  assert:
+    that:
+      - db_backup_file_stat.stat.exists
+      - db_backup_file_stat.stat.isreg
+      - db_backup_file_stat.stat.size | int > 0
+      - db_backup_file_stat.stat.readable | default(false)
+      - db_backup_status_file_stat.stat.exists
+      - db_backup_status_file_stat.stat.isreg
+      - db_backup_status_file_stat.stat.size | int > 0
+      - db_backup_status_file_stat.stat.readable | default(false)
+    fail_msg: "DB_BACKUP_FILE and its matching .master_status file must be readable regular files on the Ansible controller."
+  when: db_backup_file | length > 0
+  no_log: true
+
+- name: "Validate the selected backup naming contract / 선택한 백업 명명 계약 검증"
+  assert:
+    that:
+      - db_backup_file is match('.*\\.sql\\.gz\\.enc$')
+      - db_backup_status_file | length > 0
+    fail_msg: "DB_BACKUP_FILE must be a .sql.gz.enc artifact with a matching .master_status file beside it."
+  when:
+    - db_backup_key | length > 0
+    - db_backup_file | length > 0
+
+- name: "Validate DR database secrets / DR 데이터베이스 secret 검증"
+  assert:
+    that:
+      - lookup('env', 'MYSQL_ROOT_PASS') | length > 0
+      - lookup('env', 'WEB_DB_PASSWORD') | length > 0
+      - lookup('env', 'DOC_DB_PASSWORD') | length > 0
+    fail_msg: "Missing required secrets: MYSQL_ROOT_PASS, WEB_DB_PASSWORD, DOC_DB_PASSWORD."
+  no_log: true
+
+- name: "Validate database name contract / DB 이름 계약 검증"
+  assert:
+    that:
+      - db_target_name is match('^[A-Za-z0-9_]+$')
+    fail_msg: "TARGET_DB must contain only ASCII letters, numbers, and underscores."
+
+- name: "Require an explicit database data source policy / DB 데이터 원본 정책 명시 요구"
+  assert:
+    that:
+      - db_backup_key | length > 0 or db_allow_existing_data
+    fail_msg: "A complete encrypted backup pair is required; set DB_BACKUP_ENCRYPTION_KEY or explicitly set DB_ALLOW_EXISTING_DATA=true for a known pre-populated DR DB."
+  no_log: true
+
+- name: "Install MySQL server and client packages / MySQL 서버 및 클라이언트 패키지 설치"
+  apt:
+    name:
+      - mysql-server
+      - mysql-client
+      - netcat-openbsd
+    state: present
+    update_cache: yes
+
+- name: "Enable and start MySQL before bootstrap / MySQL 서비스 활성화 및 시작"
+  service:
+    name: mysql
+    state: started
+    enabled: yes
+
+- name: "Configure MySQL listener / MySQL listener 구성"
+  lineinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    regexp: '^\\s*bind-address\\s*='
+    line: 'bind-address = IP_REDACTED'
+  register: db_bind_config
+
+- name: "Remove only a stale DR promotion override / 구형 DR promotion override 제거"
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/mysql/mysql.conf.d/zz-hospital-dr-promotion.cnf
+    - /etc/mysql/mysql.conf.d/99-hospital-dr-promotion.cnf
+    - /etc/mysql/mysql.conf.d/100-hospital-dr-promotion.cnf
+  register: db_promotion_overrides
+
+- name: "Bootstrap or validate the MySQL root password / MySQL root password bootstrap 및 검증"
+  shell: |
+    set -euo pipefail
+    mysql_defaults_file=$(mktemp)
+    maintenance_active=0
+    restore_standby_flags() {
+      if [ "$maintenance_active" -eq 1 ]; then
+        mysql --defaults-extra-file=/etc/mysql/debian.cnf \
+          -e 'SET GLOBAL read_only=ON; SET GLOBAL super_read_only=ON' >/dev/null
+      fi
+    }
+    cleanup_mysql_defaults() {
+      rc=$?
+      restore_rc=0
+      restore_standby_flags || restore_rc=$?
+      rm -f "$mysql_defaults_file"
+      if [ "$restore_rc" -ne 0 ]; then
+        rc=1
+      fi
+      exit "$rc"
+    }
+    trap cleanup_mysql_defaults EXIT
+    chmod 600 "$mysql_defaults_file"
+    {
+      printf '[client]\n'
+      printf 'user=root\n'
+      printf 'password=%s\n' "$MYSQL_ROOT_PASS"
+    } > "$mysql_defaults_file"
+    if ! mysql --defaults-extra-file="$mysql_defaults_file" -e 'SELECT 1' >/dev/null 2>&1; then
+      if [ "${DB_ALLOW_EXISTING_DATA:-false}" = "true" ] \
+        && [ -r /etc/mysql/debian.cnf ]; then
+        mysql --defaults-extra-file=/etc/mysql/debian.cnf \
+          -e 'SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF' >/dev/null
+        maintenance_active=1
+        mysql --defaults-extra-file=/etc/mysql/debian.cnf \
+          -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASS}'; FLUSH PRIVILEGES;"
+      else
+        mysql --protocol=socket -uroot \
+          -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASS}'; FLUSH PRIVILEGES;"
+      fi
+    fi
+    mysql --defaults-extra-file="$mysql_defaults_file" -e 'SELECT 1' >/dev/null
+  args:
+    executable: /bin/bash
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+    DB_ALLOW_EXISTING_DATA: "{{ lookup('env', 'DB_ALLOW_EXISTING_DATA') | default('false', true) }}"
+  no_log: true
+
+- name: "Create DR database working directories / DR DB 작업 디렉토리 생성"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0750'
+    owner: ubuntu
+    group: ubuntu
+  loop:
+    - /home/ubuntu/scripts
+    - /home/ubuntu/db_backups
+
+- name: "Deploy database recovery scripts / DB 복구 스크립트 배포"
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - {src: db_restore.sh, dest: /home/ubuntu/scripts/db_restore.sh}
+    - {src: db_replication_configure.sh, dest: /home/ubuntu/scripts/db_replication_configure.sh}
+    - {src: db_replication_check.sh, dest: /home/ubuntu/scripts/db_replication_check.sh}
+    - {src: db_promote_dr.sh, dest: /home/ubuntu/scripts/db_promote_dr.sh}
+
+- name: "Stage encrypted database backup artifacts / 암호화 DB backup artifact staging"
+  copy:
+    src: "{{ item }}"
+    dest: /home/ubuntu/db_backups/
+    owner: ubuntu
+    group: ubuntu
+    mode: '0600'
+  with_fileglob:
+    - /var/lib/hospital-dr/db_backups/*.enc
+  when: db_backup_key | length > 0
+
+- name: "Stage matching replication coordinate metadata / matching replication 좌표 staging"
+  copy:
+    src: "{{ item }}"
+    dest: /home/ubuntu/db_backups/
+    owner: ubuntu
+    group: ubuntu
+    mode: '0640'
+  with_fileglob:
+    - /var/lib/hospital-dr/db_backups/*.master_status
+  when: db_backup_key | length > 0
+
+- name: "Stage selected encrypted backup last / 선택된 암호화 백업을 마지막에 고정 staging"
+  copy:
+    src: "{{ db_backup_file }}"
+    dest: "{{ db_backup_file_remote }}"
+    owner: ubuntu
+    group: ubuntu
+    mode: '0600'
+  when:
+    - db_backup_key | length > 0
+    - db_backup_file | length > 0
+
+- name: "Stage the selected matching replication coordinate last / 선택한 백업의 좌표 sidecar를 마지막에 고정 staging"
+  copy:
+    src: "{{ db_backup_status_file }}"
+    dest: "/home/ubuntu/db_backups/{{ db_backup_status_file | basename }}"
+    owner: ubuntu
+    group: ubuntu
+    mode: '0640'
+  when:
+    - db_backup_key | length > 0
+    - db_backup_file | length > 0
+
+- name: "Clear stale extracted restore coordinates before NR seed restore / NR seed 복원 전 오래된 추출 좌표 제거"
+  file:
+    path: /home/ubuntu/db_backups/recovery.master_status
+    state: absent
+  when: db_nr_enabled
+
+- name: "Restore the selected complete database backup pair / complete DB backup pair 복구"
+  shell: /bin/bash /home/ubuntu/scripts/db_restore.sh
+  environment:
+    DB_BACKUP_ENCRYPTION_KEY: "{{ lookup('env', 'DB_BACKUP_ENCRYPTION_KEY') }}"
+    DB_BACKUP_FILE: "{{ db_backup_file_remote }}"
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+    TARGET_DB: "{{ db_target_name }}"
+    BACKUP_DIR: /home/ubuntu/db_backups
+  when: db_backup_key | length > 0
+  register: db_restore_result
+  no_log: true
+
+- name: "Verify restored Dump coordinates match the selected sidecar / 복원 Dump 좌표와 선택 sidecar 일치 검증"
+  shell: |
+    python3 - /home/ubuntu/db_backups/{{ db_backup_status_file | basename }} /home/ubuntu/db_backups/recovery.master_status <<'PY'
+    import re
+    import sys
+    from pathlib import Path
+
+    def coordinates(path):
+        text = Path(path).read_text(encoding="utf-8")
+        files = re.findall(r"(?im)^\s*(?:File|BinlogFile)\s*:\s*(\S+)\s*$", text)
+        positions = re.findall(r"(?im)^\s*(?:Position|BinlogPosition)\s*:\s*(\d+)\s*$", text)
+        files += re.findall(r"(?i)(?:MASTER|SOURCE)_LOG_FILE\s*=\s*'([^']+)'", text)
+        positions += re.findall(r"(?i)(?:MASTER|SOURCE)_LOG_POS\s*=\s*(\d+)", text)
+        if len(set(files)) != 1 or len(set(positions)) != 1:
+            raise SystemExit("NR_COORDINATES_MISSING_OR_AMBIGUOUS")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", files[0]) or not re.fullmatch(r"[1-9][0-9]{0,19}", positions[0]):
+            raise SystemExit("NR_COORDINATES_INVALID")
+        return files[0], positions[0]
+
+    selected = coordinates(sys.argv[1])
+    restored = coordinates(sys.argv[2])
+    if selected != restored:
+        raise SystemExit("NR_RESTORED_DUMP_COORDINATES_MISMATCH")
+    print("\t".join(restored))
+    PY
+  args:
+    executable: /bin/bash
+  register: db_nr_seed_coordinate_result
+  changed_when: false
+  when: db_nr_enabled
+  no_log: true
+
+- name: "Install persistent DR standby configuration / persistent DR standby cnf 설치"
+  copy:
+    src: z-hospital-dr-standby.cnf
+    dest: /etc/mysql/mysql.conf.d/z-hospital-dr-standby.cnf
+    owner: root
+    group: root
+    mode: '0644'
+  register: db_standby_config
+
+- name: "Restart MySQL after persistent configuration / persistent 설정 적용을 위한 MySQL 재시작"
+  service:
+    name: mysql
+    state: restarted
+  when: >-
+    db_bind_config.changed or
+    db_promotion_overrides.changed or
+    db_standby_config.changed or
+    (db_restore_result is defined and db_restore_result.changed)
+
+- name: "Verify MySQL version contract / MySQL version 계약 검증"
+  shell: |
+    mysql_defaults_file=$(mktemp)
+    cleanup_mysql_defaults() { rm -f "$mysql_defaults_file"; }
+    trap cleanup_mysql_defaults EXIT
+    chmod 600 "$mysql_defaults_file"
+    {
+      printf '[client]\n'
+      printf 'user=root\n'
+      printf 'password=%s\n' "$MYSQL_ROOT_PASS"
+    } > "$mysql_defaults_file"
+    mysql --defaults-extra-file="$mysql_defaults_file" -Nse 'SELECT VERSION()'
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+  register: db_version
+  changed_when: false
+  no_log: true
+
+- name: "Require MySQL 8.0 runtime / MySQL 8.0 runtime 요구"
+  assert:
+    that:
+      - db_version.stdout is match('^8\\.0\\.')
+    fail_msg: "The DR database host is not running the required MySQL 8.0 runtime."
+  no_log: true
+
+- name: "Ensure Web and EMR database access / Web 및 EMR DB 접근 권한 구성"
+  shell: |
+    set -euo pipefail
+    mysql_defaults_file=$(mktemp)
+    maintenance_active=0
+    restore_standby_flags() {
+      if [ "$maintenance_active" -eq 1 ]; then
+        if [ -r /etc/mysql/debian.cnf ]; then
+          mysql --defaults-extra-file=/etc/mysql/debian.cnf \
+            -e 'SET GLOBAL read_only=ON; SET GLOBAL super_read_only=ON' >/dev/null
+        else
+          mysql --defaults-extra-file="$mysql_defaults_file" \
+            -e 'SET GLOBAL read_only=ON; SET GLOBAL super_read_only=ON' >/dev/null
+        fi
+      fi
+    }
+    cleanup_mysql_defaults() {
+      rc=$?
+      restore_rc=0
+      restore_standby_flags || restore_rc=$?
+      rm -f "$mysql_defaults_file"
+      if [ "$restore_rc" -ne 0 ]; then
+        rc=1
+      fi
+      exit "$rc"
+    }
+    trap cleanup_mysql_defaults EXIT
+    chmod 600 "$mysql_defaults_file"
+    {
+      printf '[client]\n'
+      printf 'user=root\n'
+      printf 'password=%s\n' "$MYSQL_ROOT_PASS"
+    } > "$mysql_defaults_file"
+    if ! mysql --defaults-extra-file="$mysql_defaults_file" \
+      -e 'SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF' >/dev/null 2>&1; then
+      if [ ! -r /etc/mysql/debian.cnf ]; then
+        exit 1
+      fi
+      mysql --defaults-extra-file=/etc/mysql/debian.cnf \
+        -e 'SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF' >/dev/null
+    fi
+    maintenance_active=1
+    mysql --defaults-extra-file="$mysql_defaults_file" -e "CREATE USER IF NOT EXISTS 'root'@'10.20.10.%' IDENTIFIED WITH mysql_native_password BY '${WEB_DB_PASSWORD}';"
+    mysql --defaults-extra-file="$mysql_defaults_file" -e "ALTER USER 'root'@'10.20.10.%' IDENTIFIED WITH mysql_native_password BY '${WEB_DB_PASSWORD}';"
+    mysql --defaults-extra-file="$mysql_defaults_file" -e "GRANT ALL PRIVILEGES ON ${TARGET_DB}.* TO 'root'@'10.20.10.%';"
+    mysql --defaults-extra-file="$mysql_defaults_file" -e "CREATE USER IF NOT EXISTS 'root'@'10.20.20.%' IDENTIFIED WITH mysql_native_password BY '${DOC_DB_PASSWORD}';"
+    mysql --defaults-extra-file="$mysql_defaults_file" -e "ALTER USER 'root'@'10.20.20.%' IDENTIFIED WITH mysql_native_password BY '${DOC_DB_PASSWORD}';"
+    mysql --defaults-extra-file="$mysql_defaults_file" -e "GRANT ALL PRIVILEGES ON ${TARGET_DB}.* TO 'root'@'10.20.20.%';"
+    mysql --defaults-extra-file="$mysql_defaults_file" -e 'FLUSH PRIVILEGES;'
+  args:
+    executable: /bin/bash
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+    WEB_DB_PASSWORD: "{{ lookup('env', 'WEB_DB_PASSWORD') }}"
+    DOC_DB_PASSWORD: "{{ lookup('env', 'DOC_DB_PASSWORD') }}"
+    TARGET_DB: "{{ db_target_name }}"
+  no_log: true
+
+- name: "Require a fresh restore of the selected Dump before NR / NR 전에 선택 Dump의 현재 실행 복원 성공 요구"
+  assert:
+    that:
+      - not db_allow_existing_data
+      - db_backup_key | length > 0
+      - db_backup_file | length > 0
+      - db_backup_file_remote | length > 0
+      - db_backup_status_file | length > 0
+      - db_backup_file_stat.stat.exists
+      - db_backup_status_file_stat.stat.exists
+      - db_restore_result is defined
+      - not (db_restore_result.skipped | default(false) | bool)
+      - db_restore_result.rc is defined
+      - db_restore_result.rc | int == 0
+      - db_nr_seed_coordinate_result is defined
+      - not (db_nr_seed_coordinate_result.skipped | default(false) | bool)
+      - db_nr_seed_coordinate_result.rc is defined
+      - db_nr_seed_coordinate_result.rc | int == 0
+    fail_msg: "NR requires this play to successfully restore the explicitly selected Dump; an existing or unverified DR database is not an acceptable seed."
+  when: db_nr_enabled
+  no_log: true
+
+- name: "Configure Position Native Replication only when explicitly enabled / 명시적 활성화 시 Position NR 구성"
+  shell: /bin/bash /home/ubuntu/scripts/db_replication_configure.sh
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+    TARGET_DB: "{{ db_target_name }}"
+    DB_SOURCE_HOST: "{{ lookup('env', 'DB_SOURCE_HOST') }}"
+    DB_SOURCE_PORT: "{{ lookup('env', 'DB_SOURCE_PORT') | default('3306', true) }}"
+    DB_REPL_USER: "{{ lookup('env', 'DB_REPL_USER') | default('repl1', true) }}"
+    DB_REPL_PASSWORD: "{{ lookup('env', 'DB_REPL_PASSWORD') }}"
+    DB_REPL_SERVER_ID: "{{ lookup('env', 'DB_REPL_SERVER_ID') | default('20', true) }}"
+    DB_REPL_MODE: "{{ lookup('env', 'DB_REPL_MODE') | default('position', true) }}"
+    DB_SOURCE_LOG_FILE: "{{ lookup('env', 'DB_SOURCE_LOG_FILE') }}"
+    DB_SOURCE_LOG_POS: "{{ lookup('env', 'DB_SOURCE_LOG_POS') }}"
+    BACKUP_DIR: /home/ubuntu/db_backups
+    DB_NR_BACKUP_ID: "{{ db_backup_file | basename }}"
+    DB_NR_BACKUP_FILE: "{{ db_backup_file_remote }}"
+    DB_NR_STATUS_FILE: "/home/ubuntu/db_backups/{{ db_backup_status_file | basename }}"
+    DB_NR_RESTORE_PROOF_BACKUP_ID: "{{ db_backup_file | basename }}"
+    DB_NR_RESTORE_PROOF_RC: "{{ db_restore_result.rc | default(-1) }}"
+    DB_NR_RESTORE_PROOF_LOG_FILE: "{{ (db_nr_seed_coordinate_result.stdout | trim).split()[0] }}"
+    DB_NR_RESTORE_PROOF_LOG_POS: "{{ (db_nr_seed_coordinate_result.stdout | trim).split()[1] }}"
+    DB_NR_ALLOW_EXISTING_DATA: "{{ db_allow_existing_data | string | lower }}"
+  when: db_nr_enabled
+  no_log: true
+
+- name: "Validate Native Replication health / Native Replication 상태 검증"
+  shell: /bin/bash /home/ubuntu/scripts/db_replication_check.sh
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+  when: db_nr_enabled
+
+- name: "Promote DR database only for an explicit failover / 명시적 failover 시에만 DR DB 승격"
+  shell: /bin/bash /home/ubuntu/scripts/db_promote_dr.sh
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+  when: db_promote_on_failover
+
+- name: "Verify database exists and is reachable / DB 존재 및 접근성 검증"
+  shell: |
+    mysql_defaults_file=$(mktemp)
+    cleanup_mysql_defaults() { rm -f "$mysql_defaults_file"; }
+    trap cleanup_mysql_defaults EXIT
+    chmod 600 "$mysql_defaults_file"
+    {
+      printf '[client]\n'
+      printf 'user=root\n'
+      printf 'password=%s\n' "$MYSQL_ROOT_PASS"
+    } > "$mysql_defaults_file"
+    mysql --defaults-extra-file="$mysql_defaults_file" -Nse "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='${TARGET_DB}'" | grep -Fxq "${TARGET_DB}"
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+    TARGET_DB: "{{ db_target_name }}"
+  changed_when: false
+  no_log: true
+
+- name: "Verify persistent standby protection when not promoted / 승격하지 않은 경우 standby 보호 검증"
+  shell: |
+    mysql_defaults_file=$(mktemp)
+    cleanup_mysql_defaults() { rm -f "$mysql_defaults_file"; }
+    trap cleanup_mysql_defaults EXIT
+    chmod 600 "$mysql_defaults_file"
+    {
+      printf '[client]\n'
+      printf 'user=root\n'
+      printf 'password=%s\n' "$MYSQL_ROOT_PASS"
+    } > "$mysql_defaults_file"
+    mysql --defaults-extra-file="$mysql_defaults_file" -Nse 'SELECT @@read_only, @@super_read_only'
+  environment:
+    MYSQL_ROOT_PASS: "{{ lookup('env', 'MYSQL_ROOT_PASS') }}"
+  register: db_standby_flags
+  changed_when: false
+  when: not db_promote_on_failover
+  no_log: true
+
+- name: "Require persistent read-only standby flags / persistent read-only standby flag 요구"
+  assert:
+    that:
+      - (db_standby_flags.stdout | trim).split()[0] == '1'
+      - (db_standby_flags.stdout | trim).split()[1] == '1'
+    fail_msg: "DR DB must remain read_only=1 and super_read_only=1 unless explicit failover promotion is enabled."
+  when: not db_promote_on_failover
+  no_log: true

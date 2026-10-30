@@ -1,0 +1,13 @@
+[Unit]
+Description=Enable Hospital DR NAT Gateway
+
+[Service]
+Type=oneshot
+User=cloud
+Environment=DR_REPO_ROOT=/home/cloud/hospital-dr-codex
+Environment=DR_TERRAFORM_DIR=/home/cloud/hospital-dr-terraform
+Environment=DR_OPERATIONS_DIR=/home/cloud/hospital-dr-codex/operations
+StateDirectory=hospital-dr
+StateDirectoryMode=0750
+WorkingDirectory=/home/cloud/hospital-dr-codex
+ExecStart=/home/cloud/hospital-dr-codex/operations/nat/nat_enable.sh

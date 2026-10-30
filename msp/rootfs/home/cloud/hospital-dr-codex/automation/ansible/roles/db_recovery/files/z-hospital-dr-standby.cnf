@@ -1,0 +1,12 @@
+# Persistent DR standby defaults. The later zz-hospital-dr-promotion.cnf
+# written only by the explicit promotion workflow overrides the two read-only
+# flags during a real failover.
+[mysqld]
+server-id=20
+log_bin=mysql-bin
+binlog_format=ROW
+gtid_mode=OFF
+enforce_gtid_consistency=OFF
+read_only=ON
+super_read_only=ON
+skip_replica_start=ON

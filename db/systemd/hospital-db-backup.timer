@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Hospital DB backup every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+AccuracySec=1s
+Unit=hospital-db-backup.service
+
+[Install]
+WantedBy=timers.target
