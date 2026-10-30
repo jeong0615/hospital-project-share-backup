@@ -11,6 +11,10 @@
 *.tar
 *.tar.gz
 *.log
+*.master_status
+access-logs.html
+firebase_backup.json
+.nat-schedule-enabled
 backups/
 db_backups/
 legacy/
