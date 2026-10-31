@@ -109,7 +109,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -252,7 +252,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -313,56 +313,55 @@
         "type": "alexanderzobnin-zabbix-datasource",
         "uid": "PA67C5EADE9207728"
       },
-      "description": "RTO in seconds. Target is 1800 seconds (30 minutes); values at or below the target are PASS, and missing data is not treated as success.",
+      "description": "Total RTO is NOT_MEASURED without a request-correlated incident/detection timestamp. The historical 1,620,514-second mixed-request value remains in raw history but is excluded from this valid-status display. Execution duration is shown separately on the RTO dashboard.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "max": 1800,
-          "min": 0,
+          "max": 1,
+          "min": -1,
           "mappings": [
             {
+              "type": "value",
               "options": {
-                "from": 0,
-                "result": {
-                  "color": "green",
-                  "text": "PASS"
+                "-1": {
+                  "color": "gray",
+                  "index": 0,
+                  "text": "NOT_MEASURED"
                 },
-                "to": 1800
-              },
-              "type": "range"
-            },
-            {
-              "options": {
-                "from": 1800.001,
-                "result": {
+                "0": {
                   "color": "red",
+                  "index": 1,
                   "text": "FAIL"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 2,
+                  "text": "PASS"
                 }
-              },
-              "type": "range"
+              }
             }
           ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "gray",
                 "value": null
               },
               {
-                "color": "orange",
-                "value": 1200
+                "color": "red",
+                "value": 0
               },
               {
-                "color": "red",
-                "value": 1800
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "unit": "s",
-          "noValue": "NO COMPLETED DR RUN"
+          "unit": "none",
+          "noValue": "NOT_MEASURED"
         },
         "overrides": []
       },
@@ -388,7 +387,150 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
+        {
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "PA67C5EADE9207728"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "macro": {
+            "filter": ""
+          },
+          "mode": 3,
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "default",
+            "useZabbixValueMapping": false
+          },
+          "proxy": {
+            "filter": ""
+          },
+          "queryType": "3",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 13,
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
+          "textFilter": "",
+          "trigger": {
+            "filter": ""
+          },
+          "itemids": "49818"
+        }
+      ],
+      "title": "Total RTO Status",
+      "type": "gauge"
+    },
     {
+      "id": 4,
+      "type": "table",
+      "title": "Failover / Failback / Dump Execution History",
+      "description": "Latest status and execution timestamp from read-only ChatOps records. NO_RECENT_EXECUTION means the last recorded run is outside the 24-hour window.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "lg",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ]
+        }
+      },
+      "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "PA67C5EADE9207728"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false,
+            "wrapText": true
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NO_RECORD"
+                },
+                "10": {
+                  "text": "SUCCEEDED"
+                },
+                "20": {
+                  "text": "FAILED"
+                },
+                "30": {
+                  "text": "PARTIAL_FAILURE"
+                },
+                "40": {
+                  "text": "DB_RESTORED_NOT_FAILOVER_COMPLETE"
+                },
+                "50": {
+                  "text": "EXECUTION_IN_PROGRESS"
+                },
+                "90": {
+                  "text": "UNKNOWN"
+                },
+                "110": {
+                  "text": "NO_RECENT_EXECUTION: SUCCEEDED"
+                },
+                "120": {
+                  "text": "NO_RECENT_EXECUTION: FAILED"
+                },
+                "130": {
+                  "text": "NO_RECENT_EXECUTION: PARTIAL_FAILURE"
+                },
+                "140": {
+                  "text": "NO_RECENT_EXECUTION: DB_RESTORED_NOT_FAILOVER_COMPLETE"
+                },
+                "190": {
+                  "text": "NO_RECENT_EXECUTION: UNKNOWN"
+                },
+                "-1": {
+                  "text": "NOT_MEASURED"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/Last Execution Time$/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
           "application": {
             "filter": ""
           },
@@ -402,10 +544,10 @@
             "filter": "Linux servers"
           },
           "host": {
-            "filter": "Hospital_DR_Automation"
+            "filter": "Hospital DR Automation"
           },
           "item": {
-            "filter": "DR total RTO seconds"
+            "filter": "/^DR Automation (Failover|Failback|Dump) (Status|Last Execution Time)$/"
           },
           "itemTag": {
             "filter": ""
@@ -419,7 +561,7 @@
             "disableDataAlignment": false,
             "showDisabledItems": false,
             "skipEmptyValues": false,
-            "useTrends": "default",
+            "useTrends": "never",
             "useZabbixValueMapping": false
           },
           "proxy": {
@@ -428,7 +570,7 @@
           "queryType": "0",
           "refId": "A",
           "resultFormat": "time_series",
-          "schema": 12,
+          "schema": 13,
           "table": {
             "skipEmptyValues": false
           },
@@ -441,47 +583,198 @@
           }
         }
       ],
-      "title": "RTO Seconds / Target 30m",
-      "type": "gauge"
-    },
-    {
-      "id": 4,
-      "type": "text",
-      "title": "Timeline Timestamps",
-      "description": "No completed DR run has published timeline timestamps.",
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 0,
-        "y": 11
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "# NO COMPLETED DR RUN\n\nIncident, detection, approval, DNS and service-recovery timestamps are not measured until a real DR run completes."
-      }
+      "transformations": [
+        {
+          "id": "reduce",
+          "options": {
+            "reducers": [
+              "lastNotNull"
+            ],
+            "labelsToFields": false,
+            "mode": "reduceFields"
+          }
+        }
+      ]
     },
     {
       "id": 5,
-      "type": "text",
-      "title": "Terraform / Ansible Stage Timestamps",
-      "description": "No completed DR run has published provisioning stage timestamps.",
+      "type": "table",
+      "title": "Terraform / Ansible History and Collection Status",
+      "description": "Latest Terraform/Ansible stage and workflow results from existing execution logs. Stage duration remains NOT_MEASURED when no verified stage start/end pair exists.",
       "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 12,
-        "y": 11
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 22
       },
       "options": {
-        "mode": "markdown",
-        "content": "# NO COMPLETED DR RUN\n\nTerraform and Ansible stage timestamps are not measured until a real DR run completes."
-      }
+        "showHeader": true,
+        "cellHeight": "lg",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ]
+        }
+      },
+      "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "PA67C5EADE9207728"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false,
+            "wrapText": true
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NO_RECORD"
+                },
+                "10": {
+                  "text": "PASS / SUCCEEDED"
+                },
+                "20": {
+                  "text": "FAILED"
+                },
+                "30": {
+                  "text": "RUN_RECORDED / PARTIAL_FAILURE"
+                },
+                "40": {
+                  "text": "DB_RESTORED_NOT_FAILOVER_COMPLETE"
+                },
+                "90": {
+                  "text": "UNKNOWN"
+                },
+                "-1": {
+                  "text": "NOT_MEASURED"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/Last Execution Time$/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/Stage Duration$/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DR Automation collection age seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "application": {
+            "filter": ""
+          },
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "PA67C5EADE9207728"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "group": {
+            "filter": "Linux servers"
+          },
+          "host": {
+            "filter": "Hospital DR Automation"
+          },
+          "item": {
+            "filter": "/^DR Automation (Terraform|Ansible) (Stage Status|Workflow Status|Last Execution Time|Stage Duration)$|^DR Automation collection age seconds$/"
+          },
+          "itemTag": {
+            "filter": ""
+          },
+          "macro": {
+            "filter": ""
+          },
+          "mode": 0,
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "never",
+            "useZabbixValueMapping": false
+          },
+          "proxy": {
+            "filter": ""
+          },
+          "queryType": "0",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 13,
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
+          "textFilter": "",
+          "trigger": {
+            "filter": ""
+          }
+        }
+      ],
+      "transformations": [
+        {
+          "id": "reduce",
+          "options": {
+            "reducers": [
+              "lastNotNull"
+            ],
+            "labelsToFields": false,
+            "mode": "reduceFields"
+          }
+        }
+      ]
     },
     {
       "datasource": {
         "type": "alexanderzobnin-zabbix-datasource",
         "uid": "PA67C5EADE9207728"
       },
-      "description": "RPO STATUS: NR NOT READY until Direct NR is completed. The numeric IO value is intentionally not treated as an RPO claim.",
+      "description": "No current IO-running sample is available; NR state is UNKNOWN and RPO remains NOT_MEASURED.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -517,7 +810,7 @@
               }
             ]
           },
-          "noValue": "NR NOT READY"
+          "noValue": "UNKNOWN"
         },
         "overrides": []
       },
@@ -545,7 +838,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -598,7 +891,7 @@
           }
         }
       ],
-      "title": "NR IO Status / RPO: NR NOT READY",
+      "title": "NR IO Status / RPO: UNKNOWN",
       "type": "stat"
     },
     {
@@ -606,7 +899,7 @@
         "type": "alexanderzobnin-zabbix-datasource",
         "uid": "PA67C5EADE9207728"
       },
-      "description": "1=running, 0=not running. Based on the latest value received from the NR check script.",
+      "description": "No current SQL-running sample is available; NR state is UNKNOWN.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -642,7 +935,7 @@
               }
             ]
           },
-          "noValue": "NR NOT READY"
+          "noValue": "UNKNOWN"
         },
         "overrides": []
       },
@@ -670,7 +963,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -731,7 +1024,7 @@
         "type": "alexanderzobnin-zabbix-datasource",
         "uid": "PA67C5EADE9207728"
       },
-      "description": "Seconds_Behind_Source from MySQL Native Replication. Lower is better.",
+      "description": "No current Seconds_Behind_Source sample is available; replication lag is UNKNOWN and RPO remains NOT_MEASURED.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -755,7 +1048,7 @@
             ]
           },
           "unit": "s",
-          "noValue": "NOT AVAILABLE - NR BLOCKED"
+          "noValue": "UNKNOWN"
         },
         "overrides": []
       },
@@ -783,7 +1076,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -843,7 +1136,7 @@
       "id": 9,
       "type": "text",
       "title": "Binlog File / Position",
-      "description": "Direct Native Replication is blocked and no active replication position is shown.",
+      "description": "No current source/applied Binlog coordinate sample is available; replication position is UNKNOWN.",
       "gridPos": {
         "h": 5,
         "w": 12,
@@ -852,7 +1145,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "# NOT ACTIVE - NR BLOCKED\n\nNo binlog file or position is presented as active replication state."
+        "content": "# NR POSITION: UNKNOWN\n\nNo current source/applied Binlog position is available. Replication is not claimed active or blocked from this missing sample. **RPO: NOT_MEASURED**."
       }
     },
     {
@@ -924,7 +1217,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -1027,7 +1320,7 @@
       },
       "pluginVersion": "11.2.2",
       "targets": [
-    {
+        {
           "application": {
             "filter": ""
           },
@@ -1083,7 +1376,7 @@
       "title": "Last Dump Time",
       "type": "stat"
     },
-        {
+    {
       "datasource": {
         "type": "__expr__",
         "uid": "__expr__"
@@ -1261,7 +1554,7 @@
       "title": "Terraform Duration",
       "type": "stat"
     },
-        {
+    {
       "datasource": {
         "type": "__expr__",
         "uid": "__expr__"
@@ -1460,6 +1753,6 @@
   "timezone": "browser",
   "title": "Hospital DR Automation",
   "uid": "hospital-dr-automation",
-  "version": 2,
+  "version": 19,
   "weekStart": ""
 }

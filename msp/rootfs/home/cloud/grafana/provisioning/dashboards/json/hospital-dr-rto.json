@@ -1,89 +1,480 @@
 {
-  "annotations": {"list": []},
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "graphTooltip": 1,
   "panels": [
     {
       "id": 1,
-      "type": "gauge",
-      "title": "Current / Latest RTO",
-      "description": "Measured incident-to-service-recovery time. Missing data is not a PASS.",
-      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
-      "fieldConfig": {"defaults": {"min": 0, "max": 1800, "unit": "s", "noValue": "NO COMPLETED DR RUN", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1200}, {"color": "red", "value": 1800}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": true, "showThresholdMarkers": true},
-      "targets": [{"refId": "A", "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "group": {"filter": "Linux servers"}, "host": {"filter": "Hospital_DR_Automation"}, "item": {"filter": "DR total RTO seconds"}, "resultFormat": "time_series"}]
+      "type": "text",
+      "title": "Last Successful Execution Duration",
+      "description": "Verified full-failover execution duration from existing successful execution logs. The 145-second correlated sample is shown separately from the latest successful log.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## Latest successful execution\n\n**149 seconds** (149.558 s) — request `ef49d18a-084e-493d-9896-eabca150e1ae`, 2026-10-30 11:42:17–11:44:46 KST. The existing full-failover log records `exit_code=0`.\n\nThe explicitly correlated 2026-10-29 sample `7e5ef872-a0e5-445d-8a1e-3453fc3c54c9` took **145 seconds** (144.729 s). Execution duration is not total RTO."
+      },
+      "pluginVersion": "11.2.2"
     },
     {
       "id": 2,
       "type": "text",
       "title": "RTO Target",
-      "description": "Project target: 30 minutes / 1800 seconds.",
-      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
-      "options": {"mode": "markdown", "content": "# RTO TARGET\n\n**1800 seconds / 30 minutes**\n\nThis is the fixed project objective and does not depend on a completed DR run."}
+      "description": "Target for total detection-to-service-recovery RTO; execution duration is reported separately.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "# RTO TARGET\n\n**300 seconds**\n\nDetection-to-verified-service-recovery target. Physical fault onset is not observed; without a request-correlated incident or Zabbix detection timestamp, total RTO remains `NOT_MEASURED`. Execution duration is reported separately.\n\n**Policy mismatch:** existing RTO calculation/preflight code still uses 3600 seconds; this Grafana change does not alter enforcement."
+      }
     },
     {
       "id": 3,
-      "type": "text",
-      "title": "RTO PASS / FAIL",
-      "description": "1=PASS, 0=FAIL, -1=NOT MEASURED. Direct NR does not affect this RTO result.",
-      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
-      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+      "type": "stat",
+      "title": "Total RTO Status",
+      "description": "Total RTO remains NOT_MEASURED unless incident/detection and verified service-recovery timestamps are correlated to the same request.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.2",
+      "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "PA67C5EADE9207728"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "PA67C5EADE9207728"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "macro": {
+            "filter": ""
+          },
+          "mode": 3,
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "default",
+            "useZabbixValueMapping": false
+          },
+          "proxy": {
+            "filter": ""
+          },
+          "queryType": "3",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 13,
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
+          "textFilter": "",
+          "trigger": {
+            "filter": ""
+          },
+          "itemids": "49818"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8A8F98"
+          },
+          "noValue": "NOT_MEASURED",
+          "unit": "",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "color": "gray",
+                  "index": 0,
+                  "text": "NOT_MEASURED"
+                },
+                "0": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "FAIL"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 2,
+                  "text": "PASS"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      }
     },
     {
       "id": 4,
       "type": "text",
-      "title": "Incident → Detection",
-      "description": "incident_at → zabbix_detected_at.",
-      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 6},
-      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+      "title": "Last Successful Request ID",
+      "description": "Latest successful request ID is from the existing completed execution log; the correlated 145-second timeline sample is an earlier run.",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## Latest successful request\n\n`ef49d18a-084e-493d-9896-eabca150e1ae`\n\nCompleted **2026-10-30 11:44:46 KST** · `exit_code=0` · execution **149 seconds**.\n\nThe 2026-10-29 correlated timeline sample was request `7e5ef872-a0e5-445d-8a1e-3453fc3c54c9` (145 seconds). Neither has a verified incident/detection timestamp for total RTO."
+      },
+      "pluginVersion": "11.2.2",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     },
     {
       "id": 5,
-      "type": "text",
-      "title": "Detection → Approval Request",
-      "description": "zabbix_detected_at → failover_approval_created_at.",
-      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 6},
-      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+      "type": "stat",
+      "title": "Request Created → First Approval",
+      "description": "No current Zabbix sample is published for this stage; verified historical timing is shown in Correlated Stage Times and Evidence.",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 11
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.2",
+      "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "PA67C5EADE9207728"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "PA67C5EADE9207728"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "macro": {
+            "filter": ""
+          },
+          "mode": 3,
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "default",
+            "useZabbixValueMapping": false
+          },
+          "proxy": {
+            "filter": ""
+          },
+          "queryType": "3",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 13,
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
+          "textFilter": "",
+          "trigger": {
+            "filter": ""
+          },
+          "itemids": "49812"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "noValue": "NOT PUBLISHED TO ZABBIX",
+          "unit": "s",
+          "decimals": 3
+        },
+        "overrides": []
+      }
     },
     {
       "id": 6,
-      "type": "text",
-      "title": "Approval Request → Approved",
-      "description": "failover_approval_created_at → failover_approved_at.",
-      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 6},
-      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+      "type": "stat",
+      "title": "First → Final Approval",
+      "description": "No current Zabbix sample is published for this stage; verified historical timing is shown in Correlated Stage Times and Evidence.",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 11
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.2",
+      "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "PA67C5EADE9207728"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "PA67C5EADE9207728"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "macro": {
+            "filter": ""
+          },
+          "mode": 3,
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "default",
+            "useZabbixValueMapping": false
+          },
+          "proxy": {
+            "filter": ""
+          },
+          "queryType": "3",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 13,
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
+          "textFilter": "",
+          "trigger": {
+            "filter": ""
+          },
+          "itemids": "49813"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "noValue": "NOT PUBLISHED TO ZABBIX",
+          "unit": "s",
+          "decimals": 3
+        },
+        "overrides": []
+      }
     },
     {
       "id": 7,
-      "type": "text",
-      "title": "Approved → Failover Start",
-      "description": "failover_approved_at → failover_started_at.",
-      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 6},
-      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+      "type": "stat",
+      "title": "Final Approval → Executor Start",
+      "description": "No current Zabbix sample is published for this stage; verified historical timing is shown in Correlated Stage Times and Evidence.",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 11
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.2",
+      "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "PA67C5EADE9207728"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "PA67C5EADE9207728"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "macro": {
+            "filter": ""
+          },
+          "mode": 3,
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "default",
+            "useZabbixValueMapping": false
+          },
+          "proxy": {
+            "filter": ""
+          },
+          "queryType": "3",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 13,
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
+          "textFilter": "",
+          "trigger": {
+            "filter": ""
+          },
+          "itemids": "49814"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "noValue": "NOT PUBLISHED TO ZABBIX",
+          "unit": "s",
+          "decimals": 3
+        },
+        "overrides": []
+      }
     },
     {
       "id": 8,
       "type": "text",
-      "title": "Failover Start → Service Recovery",
-      "description": "failover_started_at → service_recovered_at.",
-      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 11},
-      "options": {"mode": "markdown", "content": "# NOT MEASURED\n\nNo completed DR run is available."}
+      "title": "Correlated Stage Times and Evidence",
+      "description": "Request-correlated timeline evidence from the existing record. Missing incident/detection evidence is not inferred.",
+      "gridPos": {
+        "h": 6,
+        "w": 16,
+        "x": 0,
+        "y": 16
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## Correlated stage evidence — request `7e5ef872-a0e5-445d-8a1e-3453fc3c54c9`\n\n2026-10-29 KST: request → first approval **4 s**; first → final approval **3 s**; final approval → execution start **1 s**; execution start → service recovery **145 s**; service recovery → completion **1 s**.\n\nThe full-failover log reports **144.729 s** execution duration (displayed as 145 s) and `exit_code=0`. `incident_at` and `zabbix_detected_at` are absent, so **total RTO = NOT_MEASURED**. The newer successful 2026-10-30 log is 149.558 s but has no correlated RTO timeline record."
+      },
+      "pluginVersion": "11.2.2",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     },
     {
       "id": 9,
       "type": "text",
       "title": "RPO Status",
-      "description": "Direct Native Replication is not complete; no numeric RPO claim is shown.",
-      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 11},
-      "options": {"mode": "markdown", "content": "# RPO STATUS: NR NOT READY\n\nDirect NR is currently BLOCKED by the On-Prem pfSense TCP/3306 path. No synthetic replication lag or zero-loss claim is displayed.\n\nFuture completed-run RTO contract keys (not populated here): `dr.rto.seconds`, `dr.rto.target_seconds`, `dr.rto.result`, `dr.rto.detection_seconds`, `dr.rto.approval_creation_seconds`, `dr.rto.approval_seconds`, `dr.rto.approval_to_start_seconds`, `dr.rto.execution_seconds`."}
+      "description": "RPO requires a verified MySQL source/applied coordinate and freshness observation; missing evidence remains NOT_MEASURED.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "# RPO: NOT MEASURED\n\n**Target: 180 seconds**\n\nGrafana has no current verified MySQL source/applied Binlog coordinate or last-applied data timestamp. Missing evidence is not zero lag or zero data loss; no RPO PASS/FAIL claim is made.\n\n**Policy mismatch:** existing Failover/Dump RPO gates still use 900 seconds; this Grafana change does not alter enforcement."
+      }
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["MSP", "DR", "RTO", "RPO"],
-  "templating": {"list": []},
-  "time": {"from": "now-7d", "to": "now"},
+  "tags": [
+    "MSP",
+    "DR",
+    "RTO",
+    "RPO"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
   "title": "Hospital DR RTO / RPO Readiness",
   "uid": "hospital-dr-rto",
-  "version": 1
+  "version": 12
 }

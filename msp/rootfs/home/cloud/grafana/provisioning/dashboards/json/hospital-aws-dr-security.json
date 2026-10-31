@@ -45,12 +45,12 @@
       "id": 4,
       "type": "logs",
       "title": "Latest AWS Security Events",
-      "description": "Normalized CloudTrail metadata; raw session material is intentionally not indexed.",
+      "description": "Recent real CloudTrail documents with normalized string fields; raw session material is intentionally not indexed.",
       "gridPos": {"h": 10, "w": 14, "x": 0, "y": 8},
       "datasource": {"type": "elasticsearch", "uid": "PHOSPITALAWSCLOUD"},
       "fieldConfig": {"defaults": {"noValue": "NO SECURITY-RELEVANT CLOUDTRAIL EVENTS IN RANGE"}, "overrides": []},
       "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
-      "targets": [{"refId": "A", "query": "security_relevant:true", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+      "targets": [{"refId": "A", "query": "security_relevant:true", "timeField": "timestamp", "metrics": [{"id": "1", "type": "raw_data"}], "bucketAggs": [], "limit": 100}]
     },
     {
       "id": 6,

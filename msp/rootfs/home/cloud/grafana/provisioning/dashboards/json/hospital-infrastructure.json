@@ -20,8 +20,8 @@
   "panels": [
     {
       "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
-      "description": "Zabbix server's real internal view of its own agent availability. On-Prem host and shared-path states are classified separately.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "description": "Zabbix server internal agent-interface availability; status 2 is UNKNOWN.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "UNKNOWN", "mappings": [{"options": {"0": {"color": "red", "text": "NOT AVAILABLE"}, "1": {"color": "green", "text": "AVAILABLE"}, "2": {"color": "gray", "text": "UNKNOWN"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
@@ -32,7 +32,7 @@
     {
       "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
       "description": "Zabbix server agent ping. This is a real MSP runtime signal and avoids presenting unavailable On-Prem history as live data.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "UNKNOWN", "mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
       "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
       "id": 2,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
@@ -42,19 +42,19 @@
     },
     {
       "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
-      "description": "Current operator state: Web is live and reachable; Doc/EMR and DB are intentionally powered off/not tested live. An unavailable peer is never treated as proof of a global WireGuard failure.",
+      "description": "Current Zabbix readings observed during dashboard verification; host-agent state is not a direct application or WireGuard health check.",
       "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "Disconnected"}, "1": {"color": "green", "text": "Connected"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
       "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
       "id": 3,
-      "options": {"content": "## On-Prem Monitoring State\n\n**GLOBAL PATH: PASS_PARTIAL_LIVE**\n\n- Web runtime: **LIVE / WG PATH PASS**\n- Web application dependency: **DEGRADED / NOT CONFIRMED**\n- Doc/EMR: **POWERED OFF / NOT TESTED LIVE**\n- DB: **POWERED OFF / NOT TESTED LIVE**\n\nDoc/DB being unavailable is not classified as a shared-path failure. Web runtime reachability, application health, and dependency health are separate signals.", "mode": "markdown"},
+      "options": {"content": "## On-Prem Monitoring State\n\n**GLOBAL PATH: UNKNOWN**\n\nThe adjacent Zabbix panels show current host-agent, ICMP, and SNMP readings. They do not verify the end-to-end WireGuard path or the EMR/DB application health. Missing current samples remain UNKNOWN.", "mode": "markdown"},
       "targets": [],
       "title": "On-Prem Agent Path",
       "type": "text"
     },
     {
       "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
-      "description": "Actual Zabbix availability for the reachable On-Prem Web host. A 1 confirms the Web agent path; application dependency health is a separate signal.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "orange", "text": "Agent unavailable / check host state"}, "1": {"color": "green", "text": "LIVE / WG PATH PASS"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "orange", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "description": "Zabbix host-interface availability only; this item does not prove Web application or WireGuard health.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "UNKNOWN", "mappings": [{"options": {"0": {"color": "orange", "text": "NOT AVAILABLE"}, "1": {"color": "green", "text": "AGENT AVAILABLE"}, "2": {"color": "gray", "text": "UNKNOWN"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "orange", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
       "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
       "id": 9,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
@@ -80,8 +80,8 @@
     },
     {
       "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
-      "description": "Live SNMP availability reported by Zabbix for the Router and three Catalyst devices. This is monitoring evidence only and never sets DR_Escalate.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "SNMP Down"}, "1": {"color": "green", "text": "SNMP Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "description": "Live SNMP availability reported by Zabbix; status 2 is UNKNOWN. This is monitoring evidence only and never sets DR_Escalate.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "UNKNOWN", "mappings": [{"options": {"0": {"color": "red", "text": "SNMP NOT AVAILABLE"}, "1": {"color": "green", "text": "SNMP AVAILABLE"}, "2": {"color": "gray", "text": "UNKNOWN"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
       "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
       "id": 8,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},

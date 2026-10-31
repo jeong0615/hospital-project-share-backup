@@ -50,9 +50,9 @@
       "description": "Actual Zabbix Server host agent availability. On-Prem host runtime and shared-path classification are shown separately in the infrastructure dashboard.",
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 8},
       "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"},
-      "fieldConfig": {"defaults": {"unit": "short", "mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "#8A8F98"}, "noValue": "UNKNOWN", "mappings": [{"type": "value", "options": {"0": {"text": "NOT AVAILABLE", "color": "red"}, "1": {"text": "AVAILABLE", "color": "green"}, "2": {"text": "UNKNOWN", "color": "gray"}}}]}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "group": {"filter": "Zabbix servers"}, "host": {"filter": "Zabbix server"}, "item": {"filter": "Linux: Zabbix agent availability"}, "resultFormat": "time_series"}]
+      "targets": [{"application": {"filter": ""}, "datasource": {"type": "alexanderzobnin-zabbix-datasource", "uid": "PA67C5EADE9207728"}, "evaltype": "0", "functions": [], "group": {"filter": "Zabbix servers"}, "host": {"filter": "Zabbix server"}, "item": {"filter": "Linux: Zabbix agent availability"}, "itemTag": {"filter": ""}, "macro": {"filter": ""}, "mode": 0, "options": {"count": false, "disableDataAlignment": false, "showDisabledItems": false, "skipEmptyValues": false, "useTrends": "default", "useZabbixValueMapping": false}, "proxy": {"filter": ""}, "queryType": "0", "refId": "A", "resultFormat": "time_series", "schema": 12, "table": {"skipEmptyValues": false}, "tags": {"filter": ""}, "textFilter": "", "trigger": {"filter": ""}}]
     },
     {
       "id": 5,
@@ -66,9 +66,9 @@
       "id": 6,
       "type": "text",
       "title": "DR / RPO State",
-      "description": "DR state and RTO are sourced from the existing Zabbix automation dashboard. Direct Native Replication is not complete.",
+      "description": "Current DR state cannot be confirmed from the stale persisted snapshot; RPO remains NOT_MEASURED.",
       "gridPos": {"h": 8, "w": 9, "x": 15, "y": 8},
-      "options": {"mode": "markdown", "content": "## DR status\n\nSee **Hospital DR Automation** and **Hospital DR RTO / RPO Readiness** for Zabbix-backed state and RTO timeline.\n\n**RPO:** `NR NOT READY`\n\nDirect Native Replication remains blocked by the On-Prem pfSense TCP/3306 path; no synthetic lag or zero-loss value is shown."}
+      "options": {"mode": "markdown", "content": "## DR / RPO State\n\n**DR_STATE:** `UNKNOWN` — the persisted state snapshot is stale, so current DR state is not verified.\n\n**RPO:** `NOT_MEASURED`"}
     },
     {
       "id": 7,
@@ -112,7 +112,7 @@
       "datasource": {"type": "elasticsearch", "uid": "PHOSPITALDEVSECOPS"},
       "fieldConfig": {"defaults": {}, "overrides": []},
       "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
-      "targets": [{"refId": "A", "query": "source:github-actions", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+      "targets": [{"refId": "A", "query": "source:github-actions", "timeField": "timestamp", "metrics": [{"id": "1", "type": "raw_data"}], "bucketAggs": [], "limit": 100}]
     },
     {
       "id": 11,

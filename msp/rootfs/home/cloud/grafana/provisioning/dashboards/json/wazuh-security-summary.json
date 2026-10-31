@@ -47,16 +47,16 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Alerts by Agent",
-      "description": "Alert count grouped by agent.name.",
+      "title": "Alerts by Agent — 3 DISCONNECTED (snapshot 2026-10-31 18:17 KST)",
+      "description": "Read-only Wazuh agent_control snapshot at 2026-10-31 18:17 KST: hospital-db DISCONNECTED (last keep alive 2026-10-30 12:19:58 KST); hospital-emr DISCONNECTED (2026-10-30 12:19:57 KST); hospital-web DISCONNECTED (2026-10-30 12:19:39 KST). The chart shows alert counts; these status labels are a timestamped snapshot, not a live feed.",
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
       "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
       "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}, "overrides": []},
       "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {"refId": "A", "alias": "hospital-db", "query": "agent.name:hospital-db", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
-        {"refId": "B", "alias": "hospital-emr", "query": "agent.name:hospital-emr", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
-        {"refId": "C", "alias": "hospital-web", "query": "agent.name:hospital-web", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "A", "alias": "hospital-db (DISCONNECTED)", "query": "agent.name:hospital-db", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "B", "alias": "hospital-emr (DISCONNECTED)", "query": "agent.name:hospital-emr", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
+        {"refId": "C", "alias": "hospital-web (DISCONNECTED)", "query": "agent.name:hospital-web", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]},
         {"refId": "D", "alias": "wazuh.manager", "query": "agent.name:wazuh.manager", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 0, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}
       ]
     },
@@ -86,7 +86,7 @@
       "datasource": {"type": "elasticsearch", "uid": "PB0B8CD336AA8BD4C"},
       "fieldConfig": {"defaults": {}, "overrides": []},
       "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
-      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "timestamp"}}]}]
+      "targets": [{"refId": "A", "query": "*", "timeField": "timestamp", "metrics": [{"id": "1", "type": "raw_data"}], "bucketAggs": [], "limit": 100}]
     },
     {
       "id": 7,
@@ -134,14 +134,23 @@
     },
     {
       "id": 11,
-      "type": "logs",
+      "type": "text",
       "title": "Latest Vulnerability Findings",
-      "description": "Actual CVE/package findings from the Wazuh vulnerability state index. Current endpoint refresh depends on connected agents.",
-      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 30},
-      "datasource": {"type": "elasticsearch", "uid": "PHOSPITALWAZUHVULN"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "options": {"showTime": true, "showLabels": true, "showCommonLabels": false, "wrapLines": false, "prettifyLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
-      "targets": [{"refId": "A", "query": "*", "timeField": "vulnerability.detected_at", "metrics": [{"id": "1", "type": "count"}], "bucketAggs": [{"id": "2", "type": "date_histogram", "settings": {"interval": "1h", "min_doc_count": 1, "order": "desc", "orderBy": "_key", "timeField": "vulnerability.detected_at"}}]}]
+      "description": "The current 30-day vulnerability query returned no records. The feed collection timestamp is unavailable and the 2026-10-31 18:17 KST Manager snapshot had all three service agents DISCONNECTED; freshness remains UNVERIFIED.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "# Vulnerability feed freshness: UNVERIFIED\n\nThe selected 30-day query returned **0 records**. This is an empty result, not proof of a fresh vulnerability feed.\n\nLatest known `vulnerability.detected_at`: **2026-09-19 19:09 KST**. A feed collection timestamp is not available. The Wazuh Manager snapshot at **2026-10-31 18:17 KST** reported the DB, EMR, and Web agents as **DISCONNECTED**."
+      }
     }
   ],
   "refresh": "30s",
